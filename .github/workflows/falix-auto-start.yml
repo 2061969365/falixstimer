@@ -42,18 +42,19 @@ jobs:
           cat > run.mjs << 'EOF'
           import { chromium } from 'playwright-core';
           import { spawn } from 'child_process';
+          import http from 'http';
           import fs from 'fs';
-          import net from 'net';
 
-          const EMAIL     = process.env.FALIX_EMAIL;
-          const PASSWORD  = process.env.FALIX_PASSWORD;
-          const SERVER_ID = process.env.FALIX_SERVER_ID;
-          const TG_TOKEN  = process.env.TG_TOKEN;
+          const EMAIL      = process.env.FALIX_EMAIL;
+          const PASSWORD   = process.env.FALIX_PASSWORD;
+          const SERVER_ID  = process.env.FALIX_SERVER_ID;
+          const TG_TOKEN   = process.env.TG_TOKEN;
           const TG_CHAT_ID = process.env.TG_CHAT_ID;
 
-          const SERVER_URL = `https://client.falixnodes.net/server/${SERVER_ID}/console`;
           const LOGIN_URL  = 'https://client.falixnodes.net/auth/login';
+          const SERVER_URL = `https://client.falixnodes.net/server/${SERVER_ID}/console`;
           const DEBUG_PORT = 9222;
+          const CHROME_PATH = '/usr/bin/google-chrome-stable';
 
           // ── 工具 ─────────────────────────────────────────────────────────
 
@@ -62,94 +63,130 @@ jobs:
           async function sendTelegram(msg) {
             if (!TG_TOKEN || !TG_CHAT_ID) return;
             try {
-              const res = await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
+              await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ chat_id: TG_CHAT_ID, text: msg, parse_mode: 'HTML' })
               });
-              const d = await res.json();
-              if (!d.ok) console.log('TG 失败:', JSON.stringify(d));
-            } catch (e) { console.log('TG 异常:', e.message); }
+            } catch (e) { console.log('TG 失败:', e.message); }
           }
 
-          // ── 等待端口可用（TCP 探测）────────────────────────────────────────
+          // ── 检测 Chrome 调试端口（HTTP /json/version 更准确）────────────
 
-          function waitForPort(port, host, timeoutMs = 30000) {
-            return new Promise((resolve, reject) => {
-              const deadline = Date.now() + timeoutMs;
-              function attempt() {
-                const sock = new net.Socket();
-                sock.setTimeout(1000);
-                sock.connect(port, host, () => {
-                  sock.destroy();
-                  resolve();
-                });
-                sock.on('error', () => {
-                  sock.destroy();
-                  if (Date.now() > deadline) {
-                    reject(new Error(`端口 ${host}:${port} 在 ${timeoutMs}ms 内未就绪`));
-                  } else {
-                    setTimeout(attempt, 500);
-                  }
-                });
-                sock.on('timeout', () => {
-                  sock.destroy();
-                  if (Date.now() > deadline) {
-                    reject(new Error(`端口 ${host}:${port} 连接超时`));
-                  } else {
-                    setTimeout(attempt, 500);
-                  }
-                });
-              }
-              attempt();
+          function checkPort(port) {
+            return new Promise(resolve => {
+              const req = http.get(`http://127.0.0.1:${port}/json/version`, res => resolve(true));
+              req.on('error', () => resolve(false));
+              req.setTimeout(1000, () => { req.destroy(); resolve(false); });
             });
           }
 
           // ── 启动 Chrome ───────────────────────────────────────────────────
 
-          function findChrome() {
-            for (const p of [
-              '/usr/bin/google-chrome-stable',
-              '/usr/bin/google-chrome',
-              '/usr/bin/chromium-browser',
-              '/usr/bin/chromium'
-            ]) {
-              if (fs.existsSync(p)) return p;
-            }
-            throw new Error('找不到 Chrome');
-          }
-
           async function launchChrome() {
-            const chromePath = findChrome();
-            console.log(`🚀 Chrome: ${chromePath}`);
+            // 如果已有实例就跳过
+            if (await checkPort(DEBUG_PORT)) {
+              console.log('Chrome 已在运行');
+              return;
+            }
+            console.log(`🚀 启动 Chrome: ${CHROME_PATH}`);
             const args = [
               `--remote-debugging-port=${DEBUG_PORT}`,
-              '--remote-debugging-address=0.0.0.0',
+              '--no-first-run',
+              '--no-default-browser-check',
               '--no-sandbox',
               '--disable-setuid-sandbox',
               '--disable-dev-shm-usage',
               '--disable-gpu',
-              '--disable-blink-features=AutomationControlled',
-              '--disable-infobars',
               '--window-size=1280,800',
+              '--disable-blink-features=AutomationControlled',
               '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
               '--lang=zh-CN,zh',
-              `--user-data-dir=/tmp/chrome-falix-${Date.now()}`,
-              'about:blank'
+              '--user-data-dir=/tmp/chrome_falix_data'
             ];
-            const proc = spawn(chromePath, args, { detached: true, stdio: 'ignore' });
+            const proc = spawn(CHROME_PATH, args, { detached: true, stdio: 'ignore' });
             proc.unref();
-            console.log(`⏳ 等待 Chrome 调试端口 ${DEBUG_PORT} 就绪...`);
-            await waitForPort(DEBUG_PORT, '127.0.0.1', 30000);
-            console.log('✅ Chrome 调试端口已就绪');
+
+            // 轮询 HTTP /json/version，最多等 30 秒
+            console.log('⏳ 等待 Chrome 调试接口就绪...');
+            for (let i = 0; i < 30; i++) {
+              if (await checkPort(DEBUG_PORT)) {
+                console.log('✅ Chrome 就绪');
+                return;
+              }
+              await sleep(1000);
+            }
+            throw new Error('Chrome 启动超时，/json/version 未响应');
           }
+
+          // ── 连接 Chrome（带重试）─────────────────────────────────────────
+
+          async function connectChrome() {
+            for (let k = 0; k < 5; k++) {
+              try {
+                const browser = await chromium.connectOverCDP(`http://127.0.0.1:${DEBUG_PORT}`);
+                console.log('✅ CDP 连接成功');
+                return browser;
+              } catch (e) {
+                console.log(`连接失败 (${k + 1}/5): ${e.message}`);
+                await sleep(2000);
+              }
+            }
+            throw new Error('CDP 连接失败，已重试 5 次');
+          }
+
+          // ── Turnstile 注入脚本（页面加载前执行）──────────────────────────
+          // Hook attachShadow，当 Shadow DOM 创建时自动捕获 checkbox 坐标比例
+          // 存入 window.__turnstile_data = { xRatio, yRatio }
+
+          const INJECTED_SCRIPT = `
+          (function() {
+            if (window.self === window.top) return; // 只在 iframe 里注入
+
+            // 模拟真实屏幕坐标（绕过 bot 检测）
+            try {
+              const sx = Math.floor(Math.random() * 400) + 800;
+              const sy = Math.floor(Math.random() * 200) + 400;
+              Object.defineProperty(MouseEvent.prototype, 'screenX', { value: sx });
+              Object.defineProperty(MouseEvent.prototype, 'screenY', { value: sy });
+            } catch(e) {}
+
+            // Hook attachShadow，捕获 Turnstile checkbox 坐标
+            try {
+              const orig = Element.prototype.attachShadow;
+              Element.prototype.attachShadow = function(init) {
+                const shadow = orig.call(this, init);
+                if (!shadow) return shadow;
+                const check = () => {
+                  const cb = shadow.querySelector('input[type="checkbox"]');
+                  if (cb) {
+                    const r = cb.getBoundingClientRect();
+                    if (r.width > 0 && window.innerWidth > 0) {
+                      window.__turnstile_data = {
+                        xRatio: (r.left + r.width / 2) / window.innerWidth,
+                        yRatio: (r.top + r.height / 2) / window.innerHeight
+                      };
+                      return true;
+                    }
+                  }
+                  return false;
+                };
+                if (!check()) {
+                  const obs = new MutationObserver(() => { if (check()) obs.disconnect(); });
+                  obs.observe(shadow, { childList: true, subtree: true });
+                }
+                return shadow;
+              };
+            } catch(e) {}
+          })();
+          `;
 
           // ── CDP 鼠标 ──────────────────────────────────────────────────────
 
-          async function cdpMouseMove(client, fromX, fromY, toX, toY, steps = 20) {
+          async function cdpMouseMove(client, x0, y0, x1, y1, steps = 20) {
             for (let i = 0; i <= steps; i++) {
-              const x = fromX + (toX - fromX) * (i / steps) + (Math.random() - 0.5) * 2;
-              const y = fromY + (toY - fromY) * (i / steps) + (Math.random() - 0.5) * 2;
+              const x = x0 + (x1 - x0) * (i / steps) + (Math.random() - 0.5) * 2;
+              const y = y0 + (y1 - y0) * (i / steps) + (Math.random() - 0.5) * 2;
               await client.send('Input.dispatchMouseEvent', {
                 type: 'mouseMoved', x, y, modifiers: 0, buttons: 0, button: 'none', clickCount: 0
               });
@@ -180,38 +217,60 @@ jobs:
             }
           }
 
-          // ── Turnstile ─────────────────────────────────────────────────────
+          // ── Turnstile 点击（从所有 frames 的 __turnstile_data 读坐标）────
 
-          async function getTurnstilePos(page) {
-            return page.evaluate(() => {
-              const iframes = document.querySelectorAll('iframe[src*="challenges.cloudflare.com"]');
-              for (const f of iframes) {
-                const r = f.getBoundingClientRect();
-                if (r.width > 0 && r.height > 0) return { x: r.left + 25, y: r.top + r.height / 2 };
-              }
-              for (const sel of ['[data-sitekey]', 'cf-turnstile', '.cf-turnstile']) {
-                for (const w of document.querySelectorAll(sel)) {
-                  const iframe = w.querySelector('iframe') || w.shadowRoot?.querySelector('iframe');
-                  if (iframe) {
-                    const r = iframe.getBoundingClientRect();
-                    if (r.width > 0) return { x: r.left + 25, y: r.top + r.height / 2 };
-                  }
-                }
-              }
-              return null;
-            });
+          async function attemptTurnstileCdp(page) {
+            const frames = page.frames();
+            for (const frame of frames) {
+              try {
+                const data = await frame.evaluate(() => window.__turnstile_data).catch(() => null);
+                if (!data) continue;
+
+                console.log(`  >> Turnstile 数据: xRatio=${data.xRatio.toFixed(3)}, yRatio=${data.yRatio.toFixed(3)}`);
+
+                const iframeEl = await frame.frameElement();
+                if (!iframeEl) continue;
+
+                const box = await iframeEl.boundingBox();
+                if (!box) continue;
+
+                const clickX = box.x + box.width  * data.xRatio;
+                const clickY = box.y + box.height * data.yRatio;
+                console.log(`  >> 计算点击坐标: (${clickX.toFixed(1)}, ${clickY.toFixed(1)})`);
+
+                const client = await page.context().newCDPSession(page);
+                await cdpClick(client, clickX, clickY);
+                await client.detach();
+                return true;
+              } catch (e) { /* 继续下一个 frame */ }
+            }
+            return false;
           }
 
-          async function waitTurnstilePass(page, timeoutMs = 25000) {
+          // ── 等待 Turnstile token 生成（检测隐藏 input）───────────────────
+
+          async function waitTurnstileToken(page, timeoutMs = 20000) {
             const end = Date.now() + timeoutMs;
             while (Date.now() < end) {
+              // 检查 cf-turnstile-response hidden input
               const ok = await page.evaluate(() => {
                 const inputs = document.querySelectorAll(
                   'input[name="cf-turnstile-response"], textarea[name="cf-turnstile-response"]'
                 );
                 return [...inputs].some(i => i.value && i.value.length > 10);
-              });
+              }).catch(() => false);
               if (ok) return true;
+
+              // 也检查 Turnstile iframe 里的 Success 文字
+              for (const frame of page.frames()) {
+                if (!frame.url().includes('cloudflare')) continue;
+                try {
+                  const visible = await frame.getByText('Success!', { exact: false })
+                    .isVisible({ timeout: 300 }).catch(() => false);
+                  if (visible) return true;
+                } catch {}
+              }
+
               await sleep(600);
             }
             return false;
@@ -286,11 +345,14 @@ jobs:
 
           async function main() {
             await launchChrome();
-
-            const browser = await chromium.connectOverCDP(`http://127.0.0.1:${DEBUG_PORT}`);
+            const browser = await connectChrome();
             const context = browser.contexts()[0];
             const page    = context.pages()[0] || await context.newPage();
-            const client  = await page.context().newCDPSession(page);
+
+            // 注入 Turnstile Hook 脚本（每次导航前执行）
+            await page.addInitScript(INJECTED_SCRIPT);
+
+            const client = await page.context().newCDPSession(page);
 
             try {
               // ── 登录 ──────────────────────────────────────────────────────
@@ -308,21 +370,21 @@ jobs:
                 'input[name="password"], input[type="password"]', PASSWORD);
               await sleep(400 + Math.random() * 300);
 
+              // Turnstile：最多尝试 15 次，每次间隔 1 秒
               console.log('🤖 处理 Cloudflare Turnstile...');
               let turnstileOk = false;
-              for (let i = 0; i < 6; i++) {
-                const pos = await getTurnstilePos(page);
-                if (pos) {
-                  console.log(`  点击 checkbox (${pos.x.toFixed(0)}, ${pos.y.toFixed(0)})`);
-                  await cdpClick(client, pos.x, pos.y);
-                  turnstileOk = await waitTurnstilePass(page, 10000);
+              for (let i = 0; i < 15; i++) {
+                const clicked = await attemptTurnstileCdp(page);
+                if (clicked) {
+                  console.log('  >> CDP 点击已发送，等待 token...');
+                  turnstileOk = await waitTurnstileToken(page, 10000);
                   if (turnstileOk) { console.log('  ✅ Turnstile 通过'); break; }
                 } else {
-                  console.log(`  等待 Turnstile 加载 (${i + 1}/6)...`);
+                  console.log(`  >> 等待 Turnstile 加载 (${i + 1}/15)...`);
                 }
-                await sleep(2000);
+                await sleep(1000);
               }
-              if (!turnstileOk) console.log('⚠️  Turnstile 未明确通过，继续...');
+              if (!turnstileOk) console.log('⚠️  Turnstile 未明确通过，继续提交...');
 
               await sleep(500);
               console.log('🔑 提交登录...');
