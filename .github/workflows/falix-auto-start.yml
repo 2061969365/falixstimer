@@ -19,10 +19,11 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install dependencies
+      - name: Install system dependencies
         run: |
-          npm init -y
-          npm install playwright-core
+          # Xvfb 虚拟显示器（Chrome 有头模式在无 GUI 服务器上必须）
+          sudo apt-get update -qq
+          sudo apt-get install -y xvfb
 
       - name: Install Chrome
         run: |
@@ -30,16 +31,13 @@ jobs:
           echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
           sudo apt-get update -qq
           sudo apt-get install -y google-chrome-stable
-
-      - name: Check Chrome
-        run: |
-          echo "=== Chrome 版本 ==="
           google-chrome-stable --version
-          echo "=== 测试 Chrome 基本启动 ==="
-          timeout 5 google-chrome-stable \
-            --headless=new --no-sandbox --disable-setuid-sandbox \
-            --disable-dev-shm-usage --disable-gpu \
-            --dump-dom about:blank 2>&1 | head -5 || true
+
+      - name: Install Node dependencies
+        run: |
+          npm init -y
+          # puppeteer-real-browser：内置 Xvfb + Turnstile 自动点击
+          npm install puppeteer-real-browser puppeteer-core
 
       - name: Run Falix Auto Start
         env:
@@ -50,9 +48,7 @@ jobs:
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         run: |
           cat > run.mjs << 'EOF'
-          import { chromium } from 'playwright-core';
-          import { spawn } from 'child_process';
-          import http from 'http';
+          import { connect } from 'puppeteer-real-browser';
           import fs from 'fs';
 
           const EMAIL      = process.env.FALIX_EMAIL;
@@ -63,22 +59,10 @@ jobs:
 
           const LOGIN_URL  = 'https://client.falixnodes.net/auth/login';
           const SERVER_URL = `https://client.falixnodes.net/server/${SERVER_ID}/console`;
-          const DEBUG_PORT = 9222;
-          const CHROME_LOG = '/tmp/chrome_stderr.log';
 
-          function findChrome() {
-            for (const p of [
-              '/usr/bin/google-chrome-stable',
-              '/usr/bin/google-chrome',
-              '/usr/bin/chromium-browser',
-              '/usr/bin/chromium',
-            ]) {
-              if (fs.existsSync(p)) return p;
-            }
-            throw new Error('找不到 Chrome');
-          }
+          // ── 工具 ─────────────────────────────────────────────────────────
 
-          function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+          const sleep = ms => new Promise(r => setTimeout(r, ms));
 
           async function sendTelegram(msg) {
             if (!TG_TOKEN || !TG_CHAT_ID) return;
@@ -91,216 +75,14 @@ jobs:
             } catch (e) { console.log('TG 失败:', e.message); }
           }
 
-          // ── Chrome 端口检测（HTTP /json/version）─────────────────────────
+          // ── 人类化输入 ────────────────────────────────────────────────────
 
-          function checkPort(port) {
-            return new Promise(resolve => {
-              const req = http.get(`http://127.0.0.1:${port}/json/version`, res => {
-                res.resume();
-                resolve(true);
-              });
-              req.on('error', () => resolve(false));
-              req.setTimeout(1500, () => { req.destroy(); resolve(false); });
-            });
-          }
-
-          // ── 启动 Chrome ───────────────────────────────────────────────────
-          // 关键修复：detached spawn 的 stdio 必须用 fd 数字，不能用 Stream 对象
-
-          async function launchChrome() {
-            if (await checkPort(DEBUG_PORT)) {
-              console.log('Chrome 已在运行');
-              return;
-            }
-
-            const chromePath = findChrome();
-            console.log(`🚀 启动 Chrome: ${chromePath}`);
-
-            const args = [
-              `--remote-debugging-port=${DEBUG_PORT}`,
-              '--no-first-run',
-              '--no-default-browser-check',
-              '--no-sandbox',
-              '--disable-setuid-sandbox',
-              '--disable-dev-shm-usage',
-              '--disable-gpu',
-              '--window-size=1280,800',
-              '--disable-blink-features=AutomationControlled',
-              '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-              '--lang=zh-CN,zh',
-              '--user-data-dir=/tmp/chrome_falix_data',
-              '--disable-extensions',
-              '--disable-background-networking',
-              '--safebrowsing-disable-auto-update',
-              '--disable-sync',
-              '--metrics-recording-only',
-              '--disable-default-apps',
-              '--mute-audio',
-            ];
-
-            // 用 fs.openSync 拿到 fd，这才是 detached spawn 接受的 stderr 形式
-            const logFd = fs.openSync(CHROME_LOG, 'w');
-
-            const proc = spawn(chromePath, args, {
-              detached: true,
-              stdio: ['ignore', 'ignore', logFd]   // ← fd 数字，不是 Stream
-            });
-            proc.unref();
-            fs.closeSync(logFd);  // 父进程关掉自己的 fd 副本，子进程独立持有
-
-            console.log(`⏳ 等待 Chrome 就绪 (PID: ${proc.pid})...`);
-            for (let i = 0; i < 40; i++) {
-              await sleep(1000);
-              if (await checkPort(DEBUG_PORT)) {
-                console.log(`✅ Chrome 就绪（${i + 1}s）`);
-                return;
-              }
-              if (i % 10 === 9) console.log(`  仍在等待... (${i + 1}/40s)`);
-            }
-
-            // 超时时打印日志辅助排查
-            console.log('=== Chrome 错误日志 ===');
-            try { console.log(fs.readFileSync(CHROME_LOG, 'utf8').slice(0, 3000) || '(空)'); } catch {}
-            throw new Error('Chrome 启动超时（40s）');
-          }
-
-          // ── 连接 Chrome（带重试）─────────────────────────────────────────
-
-          async function connectChrome() {
-            for (let k = 0; k < 5; k++) {
-              try {
-                const b = await chromium.connectOverCDP(`http://127.0.0.1:${DEBUG_PORT}`);
-                console.log('✅ CDP 连接成功');
-                return b;
-              } catch (e) {
-                console.log(`连接失败 (${k + 1}/5): ${e.message}`);
-                await sleep(2000);
-              }
-            }
-            throw new Error('CDP 连接失败');
-          }
-
-          // ── Turnstile 注入脚本 ────────────────────────────────────────────
-
-          const INJECTED_SCRIPT = `
-          (function() {
-            if (window.self === window.top) return;
-            try {
-              const sx = Math.floor(Math.random() * 400) + 800;
-              const sy = Math.floor(Math.random() * 200) + 400;
-              Object.defineProperty(MouseEvent.prototype, 'screenX', { value: sx });
-              Object.defineProperty(MouseEvent.prototype, 'screenY', { value: sy });
-            } catch(e) {}
-            try {
-              const orig = Element.prototype.attachShadow;
-              Element.prototype.attachShadow = function(init) {
-                const shadow = orig.call(this, init);
-                if (!shadow) return shadow;
-                const check = () => {
-                  const cb = shadow.querySelector('input[type="checkbox"]');
-                  if (cb) {
-                    const r = cb.getBoundingClientRect();
-                    if (r.width > 0 && window.innerWidth > 0) {
-                      window.__turnstile_data = {
-                        xRatio: (r.left + r.width / 2) / window.innerWidth,
-                        yRatio: (r.top + r.height / 2) / window.innerHeight
-                      };
-                      return true;
-                    }
-                  }
-                  return false;
-                };
-                if (!check()) {
-                  const obs = new MutationObserver(() => { if (check()) obs.disconnect(); });
-                  obs.observe(shadow, { childList: true, subtree: true });
-                }
-                return shadow;
-              };
-            } catch(e) {}
-          })();
-          `;
-
-          // ── CDP 鼠标 ──────────────────────────────────────────────────────
-
-          async function cdpMouseMove(client, x0, y0, x1, y1, steps = 20) {
-            for (let i = 0; i <= steps; i++) {
-              const x = x0 + (x1 - x0) * (i / steps) + (Math.random() - 0.5) * 2;
-              const y = y0 + (y1 - y0) * (i / steps) + (Math.random() - 0.5) * 2;
-              await client.send('Input.dispatchMouseEvent', {
-                type: 'mouseMoved', x, y, modifiers: 0, buttons: 0, button: 'none', clickCount: 0
-              });
-              await sleep(10 + Math.random() * 20);
-            }
-          }
-
-          async function cdpClick(client, x, y) {
-            await cdpMouseMove(client, x - 60 + Math.random() * 30, y + Math.random() * 10, x, y, 18);
-            await sleep(60 + Math.random() * 100);
-            await client.send('Input.dispatchMouseEvent', {
-              type: 'mousePressed', x, y, modifiers: 0, button: 'left', buttons: 1, clickCount: 1
-            });
-            await sleep(80 + Math.random() * 80);
-            await client.send('Input.dispatchMouseEvent', {
-              type: 'mouseReleased', x, y, modifiers: 0, button: 'left', buttons: 0, clickCount: 1
-            });
-          }
-
-          async function cdpType(client, page, selector, text) {
+          async function humanType(page, selector, text) {
             await page.focus(selector);
-            await sleep(300);
+            await sleep(200);
             for (const char of text) {
-              await client.send('Input.dispatchKeyEvent', { type: 'keyDown', text: char });
-              await sleep(40 + Math.random() * 60);
-              await client.send('Input.dispatchKeyEvent', { type: 'keyUp', text: char });
-              await sleep(20 + Math.random() * 40);
+              await page.keyboard.type(char, { delay: 40 + Math.random() * 60 });
             }
-          }
-
-          // ── Turnstile ─────────────────────────────────────────────────────
-
-          async function attemptTurnstileCdp(page) {
-            for (const frame of page.frames()) {
-              try {
-                const data = await frame.evaluate(() => window.__turnstile_data).catch(() => null);
-                if (!data) continue;
-                console.log(`  >> xRatio=${data.xRatio.toFixed(3)}, yRatio=${data.yRatio.toFixed(3)}`);
-                const iframeEl = await frame.frameElement();
-                if (!iframeEl) continue;
-                const box = await iframeEl.boundingBox();
-                if (!box) continue;
-                const cx = box.x + box.width  * data.xRatio;
-                const cy = box.y + box.height * data.yRatio;
-                console.log(`  >> 点击: (${cx.toFixed(1)}, ${cy.toFixed(1)})`);
-                const c = await page.context().newCDPSession(page);
-                await cdpClick(c, cx, cy);
-                await c.detach();
-                return true;
-              } catch {}
-            }
-            return false;
-          }
-
-          async function waitTurnstileToken(page, timeoutMs = 20000) {
-            const end = Date.now() + timeoutMs;
-            while (Date.now() < end) {
-              const ok = await page.evaluate(() => {
-                const inputs = document.querySelectorAll(
-                  'input[name="cf-turnstile-response"], textarea[name="cf-turnstile-response"]'
-                );
-                return [...inputs].some(i => i.value && i.value.length > 10);
-              }).catch(() => false);
-              if (ok) return true;
-              for (const frame of page.frames()) {
-                if (!frame.url().includes('cloudflare')) continue;
-                try {
-                  const v = await frame.getByText('Success!', { exact: false })
-                    .isVisible({ timeout: 300 }).catch(() => false);
-                  if (v) return true;
-                } catch {}
-              }
-              await sleep(600);
-            }
-            return false;
           }
 
           // ── 状态检测 ──────────────────────────────────────────────────────
@@ -328,12 +110,15 @@ jobs:
             });
           }
 
+          // ── 广告弹窗 ──────────────────────────────────────────────────────
+
           async function dismissAd(page) {
             try {
-              for (const btn of await page.$$('button')) {
-                const txt = (await btn.textContent())?.trim().toLowerCase();
+              const btns = await page.$$('button');
+              for (const btn of btns) {
+                const txt = (await btn.evaluate(el => el.textContent))?.trim().toLowerCase();
                 if (txt === 'cancel') {
-                  console.log('  🚫 关闭广告');
+                  console.log('  🚫 关闭广告弹窗');
                   await btn.click();
                   await sleep(1000);
                   return true;
@@ -343,15 +128,20 @@ jobs:
             return false;
           }
 
-          async function clickStart(page, client) {
+          // ── 点击 Start ────────────────────────────────────────────────────
+
+          async function clickStart(page) {
             await dismissAd(page);
-            for (const btn of await page.$$('button')) {
-              const txt = (await btn.textContent())?.trim().toLowerCase();
+            const btns = await page.$$('button');
+            for (const btn of btns) {
+              const txt = (await btn.evaluate(el => el.textContent))?.trim().toLowerCase();
               if (txt === 'start') {
                 const box = await btn.boundingBox();
                 if (box) {
                   console.log('  ▶️  点击 Start');
-                  await cdpClick(client, box.x + box.width / 2, box.y + box.height / 2);
+                  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 10 });
+                  await sleep(100);
+                  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
                   await sleep(2000);
                   await dismissAd(page);
                   return true;
@@ -365,69 +155,94 @@ jobs:
           // ── 主流程 ────────────────────────────────────────────────────────
 
           async function main() {
-            await launchChrome();
-            const browser = await connectChrome();
-            const context = browser.contexts()[0];
-            const page    = context.pages()[0] || await context.newPage();
-            await page.addInitScript(INJECTED_SCRIPT);
-            const client = await page.context().newCDPSession(page);
+            console.log('🚀 启动浏览器（puppeteer-real-browser + Xvfb）...');
+
+            // puppeteer-real-browser 自动管理 Xvfb 虚拟显示器
+            // turnstile: true 内置 Turnstile 自动点击
+            const { browser, page } = await connect({
+              headless: false,          // 有头模式（Xvfb 提供虚拟显示）
+              turnstile: true,          // 自动处理 Cloudflare Turnstile
+              disableXvfb: false,       // 启用 Xvfb（Linux 无 GUI 环境必须）
+              args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-gpu',
+                '--window-size=1280,800',
+                '--lang=zh-CN,zh',
+              ],
+              customConfig: {
+                chromePath: '/usr/bin/google-chrome-stable',
+              },
+              connectOption: {
+                defaultViewport: { width: 1280, height: 800 }
+              },
+            });
+
+            console.log('✅ 浏览器已启动');
 
             try {
+              // ── 登录 ──────────────────────────────────────────────────────
               console.log('📋 打开登录页...');
               await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
               await sleep(2500);
 
               console.log('✏️  填写邮箱...');
-              await cdpType(client, page,
-                'input[name="email"], input[type="email"], input[placeholder*="email" i]', EMAIL);
+              await humanType(page,
+                'input[name="email"], input[type="email"]', EMAIL);
               await sleep(400 + Math.random() * 300);
 
               console.log('✏️  填写密码...');
-              await cdpType(client, page,
+              await humanType(page,
                 'input[name="password"], input[type="password"]', PASSWORD);
               await sleep(400 + Math.random() * 300);
 
-              console.log('🤖 处理 Turnstile...');
+              // Turnstile 由 puppeteer-real-browser 自动处理（turnstile: true）
+              // 等待 token 出现
+              console.log('🤖 等待 Turnstile 自动处理...');
               let turnstileOk = false;
-              for (let i = 0; i < 15; i++) {
-                const clicked = await attemptTurnstileCdp(page);
-                if (clicked) {
-                  turnstileOk = await waitTurnstileToken(page, 10000);
-                  if (turnstileOk) { console.log('  ✅ Turnstile 通过'); break; }
-                } else {
-                  console.log(`  >> 等待 Turnstile (${i + 1}/15)...`);
-                }
+              for (let i = 0; i < 20; i++) {
+                const ok = await page.evaluate(() => {
+                  const inputs = document.querySelectorAll(
+                    'input[name="cf-turnstile-response"], textarea[name="cf-turnstile-response"]'
+                  );
+                  return [...inputs].some(inp => inp.value && inp.value.length > 10);
+                }).catch(() => false);
+                if (ok) { turnstileOk = true; console.log('  ✅ Turnstile token 已生成'); break; }
+                if (i % 5 === 4) console.log(`  等待中... (${i + 1}/20s)`);
                 await sleep(1000);
               }
-              if (!turnstileOk) console.log('⚠️  Turnstile 未明确通过，继续...');
+              if (!turnstileOk) console.log('⚠️  Turnstile 未明确通过，继续提交...');
 
-              await sleep(500);
-              console.log('🔑 提交登录...');
+              console.log('🔑 点击登录按钮...');
               const loginBtn = await page.$('button[type="submit"]');
               if (loginBtn) {
-                const box = await loginBtn.boundingBox();
-                if (box) await cdpClick(client, box.x + box.width / 2, box.y + box.height / 2);
+                await loginBtn.click();
               } else {
                 await page.keyboard.press('Enter');
               }
 
+              // 等待跳转
               try {
                 await page.waitForNavigation({ timeout: 20000, waitUntil: 'domcontentloaded' });
               } catch { await sleep(5000); }
 
               const afterUrl = page.url();
               console.log('当前 URL:', afterUrl);
+
               if (afterUrl.includes('/auth/login')) {
                 await page.screenshot({ path: '/tmp/login_fail.png' });
-                await sendTelegram('❌ <b>Falix</b> 登录失败');
+                await sendTelegram('❌ <b>Falix</b> 登录失败，仍在登录页');
                 process.exit(1);
               }
               console.log('✅ 登录成功！');
 
+              // ── 跳转控制台 ─────────────────────────────────────────────────
               console.log(`🖥️  跳转: ${SERVER_URL}`);
               await page.goto(SERVER_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
               await sleep(3000);
 
+              // ── 检测状态 & 操作 ────────────────────────────────────────────
               const status = await getServerStatus(page);
               console.log(`📊 当前状态: ${status}`);
 
@@ -437,12 +252,12 @@ jobs:
                 process.exit(0);
               }
 
-              console.log('🔴 Offline，启动中...');
-              await clickStart(page, client);
+              console.log('🔴 Offline，开始启动...');
+              await clickStart(page);
 
               console.log('⏳ 等待 15 秒...');
               await sleep(15000);
-              await page.reload({ waitUntil: 'domcontentloaded', timeout: 20000 });
+              await page.reload({ waitUntil: 'domcontentloaded' });
               await sleep(2000);
 
               const status2 = await getServerStatus(page);
@@ -451,19 +266,20 @@ jobs:
               if (status2 === 'starting' || status2 === 'online') {
                 await page.screenshot({ path: '/tmp/ok.png' });
                 await sendTelegram(`✅ <b>Falix</b> 启动成功，状态: <code>${status2}</code>`);
+                console.log('✅ 启动成功！');
               } else {
-                console.log('⚠️  再次点击 Start...');
-                await clickStart(page, client);
+                console.log('⚠️  状态未变，再次点击 Start...');
+                await clickStart(page);
                 await sleep(8000);
-                await page.reload({ waitUntil: 'domcontentloaded', timeout: 20000 });
+                await page.reload({ waitUntil: 'domcontentloaded' });
                 await sleep(2000);
                 const status3 = await getServerStatus(page);
-                console.log(`📊 最终: ${status3}`);
+                console.log(`📊 最终状态: ${status3}`);
                 await page.screenshot({ path: '/tmp/final.png' });
                 if (status3 === 'starting' || status3 === 'online') {
                   await sendTelegram(`✅ <b>Falix</b> 二次启动成功，状态: <code>${status3}</code>`);
                 } else {
-                  await sendTelegram(`⚠️ <b>Falix</b> 两次后仍为 <code>${status3}</code>`);
+                  await sendTelegram(`⚠️ <b>Falix</b> 两次后仍为 <code>${status3}</code>，请手动检查`);
                 }
               }
 
