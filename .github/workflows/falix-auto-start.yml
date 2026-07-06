@@ -26,14 +26,34 @@ jobs:
       - name: Install system dependencies
         run: sudo apt-get update -qq && sudo apt-get install -y xvfb
 
+      - name: Cache Chrome
+        id: cache-chrome
+        uses: actions/cache@v4
+        with:
+          path: /opt/google/chrome
+          key: chrome-v1
+
       - name: Install Chrome
+        if: steps.cache-chrome.outputs.cache-hit != 'true'
         run: |
           wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
           echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
           sudo apt-get update -qq && sudo apt-get install -y google-chrome-stable
           google-chrome-stable --version
 
+      - name: Link Chrome
+        if: steps.cache-chrome.outputs.cache-hit == 'true'
+        run: sudo ln -sf /opt/google/chrome/google-chrome /usr/bin/google-chrome-stable
+
+      - name: Cache node_modules
+        id: cache-npm
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: npm-v1
+
       - name: Install Node dependencies
+        if: steps.cache-npm.outputs.cache-hit != 'true'
         run: npm init -y && npm install puppeteer-real-browser puppeteer-core
 
       - name: Write script
