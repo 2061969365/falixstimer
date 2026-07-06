@@ -48,6 +48,7 @@ jobs:
           const TG_CHAT_ID= process.env.TG_CHAT_ID;
           const LOGIN_URL = 'https://client.falixnodes.net/auth/login';
           const SERVER_URL= `https://client.falixnodes.net/server/${SERVER_ID}/console`;
+          const TIMER_URL = `https://client.falixnodes.net/timer?id=${SERVER_ID}`;
 
           const sleep = ms => new Promise(r => setTimeout(r, ms));
           fs.mkdirSync('/tmp/ss', { recursive: true });
@@ -138,6 +139,46 @@ jobs:
                 for (const el of document.querySelectorAll(s)) { const r=w(el); if(r) return r; }
               return w(document.body) || 'unknown';
             });
+          }
+
+          async function doExtend(page) {
+            console.log('=== TIMER EXTEND ===');
+            await page.goto(TIMER_URL, { waitUntil:'domcontentloaded', timeout:30000 });
+            await sleep(3000);
+            await shot(page, 'timer_01_loaded');
+
+            const tc = await clickTurnstile(page);
+            if (tc) {
+              const ok = await waitTurnstile(page);
+              console.log(ok ? 'turnstile ok' : 'turnstile unconfirmed');
+            }
+            await shot(page, 'timer_02_turnstile');
+            await sleep(1000);
+
+            const tp = await btnPos(page, '添加时间');
+            if (tp) {
+              console.log('click 添加时间 @ ' + (tp.x|0) + ',' + (tp.y|0));
+              await cdpClick(page, tp.x, tp.y);
+              await sleep(3000);
+              await shot(page, 'timer_03_clicked');
+            } else {
+              console.log('no extend button found');
+              await shot(page, 'timer_03_no_btn');
+              return 'no_btn';
+            }
+
+            for (let i = 0; i < 10; i++) {
+              const ok = await page.evaluate(() => document.body.innerText.includes('Timer has been extended'));
+              if (ok) {
+                console.log('timer extended ok');
+                await shot(page, 'timer_04_extended');
+                return 'ok';
+              }
+              await sleep(1000);
+            }
+            console.log('timer extend unconfirmed');
+            await shot(page, 'timer_04_unconfirmed');
+            return 'unconfirmed';
           }
 
           async function doStart(page) {
@@ -240,6 +281,15 @@ jobs:
                 await tg('⚠️ <b>Falix</b> 三次后仍为 <code>' + final + '</code>');
                 console.log('still: ' + final);
               }
+            }
+
+            const ext = await doExtend(page);
+            if (ext === 'ok') {
+              await tg('✅ <b>Falix</b> 计时器已续期');
+              console.log('timer extend success');
+            } else {
+              await tg('⚠️ <b>Falix</b> 计时器续期失败: <code>' + ext + '</code>');
+              console.log('timer extend failed: ' + ext);
             }
           } catch(e) {
             console.error('error: ' + e.message);
