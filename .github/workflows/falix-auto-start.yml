@@ -56,8 +56,13 @@ jobs:
           fs.mkdirSync('/tmp/ss', { recursive: true });
 
           async function shot(page, name) {
-            try { await page.screenshot({ path: `/tmp/ss/${name}.png`, fullPage: true, timeout: 15000 }); console.log('shot:' + name); }
-            catch(e) { console.log('shot fail ' + name + ': ' + e.message); }
+            try {
+              await Promise.race([
+                page.screenshot({ path: `/tmp/ss/${name}.png`, fullPage: true }),
+                new Promise((_,rej) => setTimeout(() => rej(new Error('timeout')), 15000))
+              ]);
+              console.log('shot:' + name);
+            } catch(e) { console.log('shot fail ' + name + ': ' + e.message); }
           }
 
           async function tg(msg) {
@@ -404,7 +409,8 @@ jobs:
             const ext = await doExtend(page, browser);
 
             if (ext === 'ok') {
-              await sleep(2000);
+              await page.goto(TIMER_URL, { timeout:15000 }).catch(()=>{});
+              await sleep(3000);
               const timeAfter = await getRemainingTime(page);
               console.log('time after extend: ' + timeAfter + 's');
               if (timeAfter >= 3500 && timeAfter <= 3700 && timeBefore > 0) {
