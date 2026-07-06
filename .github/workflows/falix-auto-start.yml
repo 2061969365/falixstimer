@@ -145,81 +145,78 @@ jobs:
 
           async function doExtend(page, browser) {
             console.log('=== TIMER EXTEND ===');
-            await page.goto(TIMER_URL, { waitUntil:'domcontentloaded', timeout:30000 });
+            await page.goto(TIMER_URL, { waitUntil:'domcontentloaded', timeout:30000 }).catch(()=>{});
             await sleep(3000);
-            await shot(page, 'timer_01_loaded');
+            await shot(page, 'timer_01_loaded').catch(()=>{});
 
             const tc = await clickTurnstile(page);
             if (tc) {
               const ok = await waitTurnstile(page);
               console.log(ok ? 'turnstile ok' : 'turnstile unconfirmed');
             }
-            await shot(page, 'timer_02_turnstile');
+            await shot(page, 'timer_02_turnstile').catch(()=>{});
             await sleep(2000);
 
             const tp = await btnPos(page, 'add time') || await btnPos(page, '添加时间');
             if (!tp) {
               console.log('no extend button found');
-              await shot(page, 'timer_03_no_btn');
+              await shot(page, 'timer_03_no_btn').catch(()=>{});
               return 'no_btn';
             }
             console.log('click add time @ ' + (tp.x|0) + ',' + (tp.y|0));
             await cdpClick(page, tp.x, tp.y);
             await sleep(3000);
-            await shot(page, 'timer_03_addtime');
+            await shot(page, 'timer_03_addtime').catch(()=>{});
 
             const wp = await btnPos(page, 'watch ad') || await btnPos(page, '观看广告');
             if (!wp) {
               console.log('no watch ad button found');
-              await shot(page, 'timer_04_no_ad');
+              await shot(page, 'timer_04_no_ad').catch(()=>{});
               return 'no_ad_btn';
             }
             console.log('click watch ad @ ' + (wp.x|0) + ',' + (wp.y|0));
 
-            let newTarget = null;
-            const listener = t => { if (t.type() === 'page') { newTarget = t; } };
-            browser.on('targetcreated', listener);
+            const urlBefore = page.url();
+            const countBefore = (await browser.pages().catch(()=>[])).length;
             await cdpClick(page, wp.x, wp.y);
-            await sleep(3000);
-            browser.off('targetcreated', listener);
+            await sleep(4000);
 
-            const preCount = (await browser.pages()).length;
-            await sleep(2000);
-            const curCount = (await browser.pages()).length;
+            const urlAfter = page.url();
+            const pagesNow = await browser.pages().catch(()=>[]);
 
-            if (newTarget) {
-              try {
-                const adPage = await newTarget.page();
-                console.log('ad opened in new tab: ' + adPage.url());
-                for (let s = 0; s < 30; s++) {
-                  await sleep(3000);
-                  const still = await browser.pages().catch(()=>[]);
-                  if (!still.includes(adPage)) { console.log('ad tab closed after ' + ((s+1)*3) + 's'); break; }
-                  if (s % 5 === 4) console.log('ad still playing... ' + ((s+1)*3) + 's');
-                }
-                try { await adPage.close(); } catch(e) {}
-              } catch(e) { console.log('ad tab error: ' + e.message); }
-            } else if (curCount > preCount) {
-              const pages = await browser.pages();
-              const adPage = pages[pages.length - 1];
-              console.log('ad in new page: ' + adPage.url());
-              for (let s = 0; s < 30; s++) {
+            if (urlAfter !== urlBefore && !urlAfter.includes('timer?id=')) {
+              console.log('ad navigated current page to: ' + urlAfter.substring(0,80));
+              const adDeadline = Date.now() + 55000;
+              while (Date.now() < adDeadline) {
+                await sleep(2000);
+                try {
+                  const cur = page.url();
+                  if (cur.includes('timer?id=')) { console.log('back on timer page'); break; }
+                } catch(e) { console.log('page nav error, will goto timer'); break; }
+              }
+            } else if (pagesNow.length > countBefore) {
+              const adPage = pagesNow[pagesNow.length - 1];
+              console.log('ad opened new tab: ' + (await adPage.url().catch(()=>'?')));
+              const adDeadline = Date.now() + 55000;
+              while (Date.now() < adDeadline) {
                 await sleep(3000);
-                const still = await browser.pages().catch(()=>[]);
-                if (!still.includes(adPage)) { console.log('ad page closed after ' + ((s+1)*3) + 's'); break; }
-                if (s % 5 === 4) console.log('ad still playing... ' + ((s+1)*3) + 's');
+                const curPages = await browser.pages().catch(()=>[]);
+                if (!curPages.includes(adPage)) { console.log('ad tab closed'); break; }
               }
               try { await adPage.close(); } catch(e) {}
             } else {
-              console.log('ad may have navigated current page, waiting 30s...');
-              await sleep(30000);
+              console.log('ad no navigation detected, waiting 25s...');
+              await sleep(25000);
             }
             try { await page.bringToFront(); } catch(e) {}
 
-            console.log('navigating back to timer page...');
-            await page.goto(TIMER_URL, { waitUntil:'domcontentloaded', timeout:30000 }).catch(()=>{});
+            console.log('reloading timer page...');
+            await page.goto(TIMER_URL, { timeout:15000 }).catch(async ()=>{
+              console.log('first goto failed, retrying once...');
+              await sleep(3000);
+              await page.goto(TIMER_URL, { timeout:15000 }).catch(()=>{});
+            });
             await sleep(5000);
-            await shot(page, 'timer_05_back');
 
             const tc2 = await clickTurnstile(page);
             if (tc2) { await waitTurnstile(page); }
@@ -230,7 +227,7 @@ jobs:
               console.log('click add time again @ ' + (tp2.x|0) + ',' + (tp2.y|0));
               await cdpClick(page, tp2.x, tp2.y);
               await sleep(3000);
-              await shot(page, 'timer_06_after_add');
+              await shot(page, 'timer_06_after_add').catch(()=>{});
             }
 
             const extended = await page.evaluate(() =>
@@ -238,7 +235,7 @@ jobs:
               document.body.innerText.includes('计时器已') ||
               document.body.innerText.includes('extended')
             ).catch(()=>false);
-            await shot(page, 'timer_07_result');
+            await shot(page, 'timer_07_result').catch(()=>{});
             if (extended) {
               console.log('timer extended ok');
               return 'ok';
@@ -246,7 +243,6 @@ jobs:
             console.log('extend unconfirmed');
             return 'unconfirmed';
           }
-
           async function doStart(page) {
             for (let round = 1; round <= 3; round++) {
               console.log('--- round ' + round + '/3 ---');
