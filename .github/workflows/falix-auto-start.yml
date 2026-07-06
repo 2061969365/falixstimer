@@ -181,7 +181,7 @@ jobs:
             browser.on('targetcreated', listener);
             await cdpClick(page, wp.x, wp.y);
             await sleep(3000);
-            browser.removeListener('targetcreated', listener);
+            browser.off('targetcreated', listener);
 
             const preCount = (await browser.pages()).length;
             await sleep(2000);
