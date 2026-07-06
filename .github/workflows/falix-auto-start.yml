@@ -176,6 +176,7 @@ jobs:
             }
             console.log('click watch ad @ ' + (wp.x|0) + ',' + (wp.y|0));
 
+            let alreadyExt = false;
             const urlBefore = page.url();
             const countBefore = (await browser.pages().catch(()=>[])).length;
             await cdpClick(page, wp.x, wp.y);
@@ -192,6 +193,12 @@ jobs:
                 try {
                   const cur = page.url();
                   if (cur.includes('timer?id=')) { console.log('back on timer page'); break; }
+                  const txt = await page.evaluate(() => document.body.innerText.substring(0,200)).catch(()=>'');
+                  if (txt.includes('Timer has been extended') || txt.includes('extended')) {
+                    console.log('timer extended during ad wait');
+                    alreadyExt = true;
+                    break;
+                  }
                 } catch(e) { console.log('page nav error, will goto timer'); break; }
               }
             } else if (pagesNow.length > countBefore) {
@@ -202,13 +209,46 @@ jobs:
                 await sleep(3000);
                 const curPages = await browser.pages().catch(()=>[]);
                 if (!curPages.includes(adPage)) { console.log('ad tab closed'); break; }
+                try {
+                  const txt = await page.evaluate(() => document.body.innerText.substring(0,200)).catch(()=>'');
+                  if (txt.includes('Timer has been extended') || txt.includes('extended')) {
+                    console.log('timer extended during ad wait');
+                    alreadyExt = true;
+                    break;
+                  }
+                } catch(e) {}
               }
               try { await adPage.close(); } catch(e) {}
             } else {
-              console.log('ad no navigation detected, waiting 25s...');
-              await sleep(25000);
+              console.log('ad no navigation detected, waiting 50s...');
+              const adDeadline = Date.now() + 50000;
+              while (Date.now() < adDeadline) {
+                await sleep(3000);
+                try {
+                  const txt = await page.evaluate(() => document.body.innerText.substring(0,200)).catch(()=>'');
+                  if (txt.includes('Timer has been extended') || txt.includes('extended')) {
+                    console.log('timer extended during ad wait');
+                    alreadyExt = true;
+                    break;
+                  }
+                  if (txt.includes('add time') || txt.includes('添加时间')) {
+                    console.log('back on timer page during ad wait');
+                    break;
+                  }
+                } catch(e) {}
+              }
+              for (const sel of ['.close','.dismiss','.skip','button[aria-label*=\"close\"]','[class*=\"close\"]','[class*=\"dismiss\"]']) {
+                const el = await page.$(sel).catch(()=>null);
+                if (el) { try { await el.click(); console.log('dismissed: ' + sel); await sleep(1000); } catch(e) {} }
+              }
             }
             try { await page.bringToFront(); } catch(e) {}
+
+            if (alreadyExt) {
+              console.log('timer extended ok (detected during ad wait)');
+              await shot(page, 'timer_07_result').catch(()=>{});
+              return 'ok';
+            }
 
             console.log('reloading timer page...');
             await page.goto(TIMER_URL, { timeout:15000 }).catch(async ()=>{
