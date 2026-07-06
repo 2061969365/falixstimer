@@ -151,12 +151,14 @@ jobs:
           async function getRemainingTime(page) {
             return page.evaluate(() => {
               const t = document.body.innerText;
+              let h=0, m=0, s=0;
               const hms = t.match(/(\d+):(\d{2}):(\d{2})/);
               if (hms) return +hms[1]*3600 + +hms[2]*60 + +hms[3];
-              const h = t.match(/(\d+)\s*h(?:ou)?r?s?\b/i);
-              const m = t.match(/(\d+)\s*m(?:in)?s?\b/i);
-              const s = t.match(/(\d+)\s*s(?:ec)?s?\b/i);
-              if (h||m||s) return (+(h?h[1]:0))*3600 + (+(m?m[1]:0))*60 + (+(s?s[1]:0));
+              const he = t.match(/(\d+)\s*(?:h|hours?|小时|时)/i);
+              const me = t.match(/(\d+)\s*(?:m|minutes?|分钟|分)/i);
+              const se = t.match(/(\d+)\s*(?:s|seconds?|秒)/i);
+              if (he) h=+he[1]; if (me) m=+me[1]; if (se) s=+se[1];
+              if (h||m||s) return h*3600 + m*60 + s;
               return -1;
             }).catch(()=>-1);
           }
@@ -255,9 +257,11 @@ jobs:
                   }
                 } catch(e) {}
               }
-              for (const sel of ['.close','.dismiss','.skip','button[aria-label*=\"close\"]','[class*=\"close\"]','[class*=\"dismiss\"]']) {
-                const el = await page.$(sel).catch(()=>null);
-                if (el) { try { await el.click(); console.log('dismissed: ' + sel); await sleep(1000); } catch(e) {} }
+              if (!alreadyExt) {
+                for (const sel of ['.close','.dismiss','.skip','button[aria-label*=\"close\"]','[class*=\"close\"]','[class*=\"dismiss\"]']) {
+                  const el = await page.$(sel).catch(()=>null);
+                  if (el) { try { await el.click(); console.log('dismissed: ' + sel); await sleep(1000); } catch(e) {} }
+                }
               }
             }
             try { await page.bringToFront(); } catch(e) {}
