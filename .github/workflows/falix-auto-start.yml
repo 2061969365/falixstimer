@@ -143,41 +143,50 @@ jobs:
 
           async function doExtend(page) {
             console.log('=== TIMER EXTEND ===');
-            await page.goto(TIMER_URL, { waitUntil:'domcontentloaded', timeout:30000 });
-            await sleep(3000);
-            await shot(page, 'timer_01_loaded');
-
-            const tc = await clickTurnstile(page);
-            if (tc) {
-              const ok = await waitTurnstile(page);
-              console.log(ok ? 'turnstile ok' : 'turnstile unconfirmed');
-            }
-            await shot(page, 'timer_02_turnstile');
-            await sleep(1000);
-
-            const tp = await btnPos(page, '添加时间');
-            if (tp) {
-              console.log('click 添加时间 @ ' + (tp.x|0) + ',' + (tp.y|0));
-              await cdpClick(page, tp.x, tp.y);
+            for (let attempt = 1; attempt <= 2; attempt++) {
+              console.log('--- attempt ' + attempt + '/2 ---');
+              await page.goto(TIMER_URL, { waitUntil:'domcontentloaded', timeout:30000 });
               await sleep(3000);
-              await shot(page, 'timer_03_clicked');
-            } else {
-              console.log('no extend button found');
-              await shot(page, 'timer_03_no_btn');
-              return 'no_btn';
-            }
+              await shot(page, 'timer_' + attempt + '_01_loaded');
 
-            for (let i = 0; i < 10; i++) {
-              const ok = await page.evaluate(() => document.body.innerText.includes('Timer has been extended'));
-              if (ok) {
-                console.log('timer extended ok');
-                await shot(page, 'timer_04_extended');
-                return 'ok';
+              const tc = await clickTurnstile(page);
+              if (tc) {
+                const ok = await waitTurnstile(page);
+                console.log(ok ? 'turnstile ok' : 'turnstile unconfirmed');
               }
-              await sleep(1000);
+              await shot(page, 'timer_' + attempt + '_02_turnstile');
+              await sleep(2000);
+
+              const tp = await btnPos(page, 'add time') || await btnPos(page, '添加时间');
+              if (tp) {
+                console.log('click add time @ ' + (tp.x|0) + ',' + (tp.y|0));
+                await cdpClick(page, tp.x, tp.y);
+                await sleep(5000);
+                await shot(page, 'timer_' + attempt + '_03_clicked');
+              } else {
+                console.log('no extend button found');
+                await shot(page, 'timer_' + attempt + '_03_no_btn');
+                if (attempt < 2) { await sleep(3000); continue; }
+                return 'no_btn';
+              }
+
+              for (let i = 0; i < 15; i++) {
+                const ok = await page.evaluate(() =>
+                  document.body.innerText.includes('Timer has been extended') ||
+                  document.body.innerText.includes('计时器已') ||
+                  document.body.innerText.includes('extended')
+                );
+                if (ok) {
+                  console.log('timer extended ok');
+                  await shot(page, 'timer_' + attempt + '_04_extended');
+                  return 'ok';
+                }
+                await sleep(1000);
+              }
+              console.log('timer extend unconfirmed, retrying...');
+              await shot(page, 'timer_' + attempt + '_04_unconfirmed');
+              if (attempt < 2) await sleep(3000);
             }
-            console.log('timer extend unconfirmed');
-            await shot(page, 'timer_04_unconfirmed');
             return 'unconfirmed';
           }
 
