@@ -189,18 +189,28 @@ jobs:
               try {
                 const adPage = await newTarget.page();
                 console.log('ad opened in new tab: ' + adPage.url());
-                await sleep(20000);
+                for (let s = 0; s < 30; s++) {
+                  await sleep(3000);
+                  const still = await browser.pages().catch(()=>[]);
+                  if (!still.includes(adPage)) { console.log('ad tab closed after ' + ((s+1)*3) + 's'); break; }
+                  if (s % 5 === 4) console.log('ad still playing... ' + ((s+1)*3) + 's');
+                }
                 try { await adPage.close(); } catch(e) {}
               } catch(e) { console.log('ad tab error: ' + e.message); }
             } else if (curCount > preCount) {
               const pages = await browser.pages();
               const adPage = pages[pages.length - 1];
               console.log('ad in new page: ' + adPage.url());
-              await sleep(20000);
+              for (let s = 0; s < 30; s++) {
+                await sleep(3000);
+                const still = await browser.pages().catch(()=>[]);
+                if (!still.includes(adPage)) { console.log('ad page closed after ' + ((s+1)*3) + 's'); break; }
+                if (s % 5 === 4) console.log('ad still playing... ' + ((s+1)*3) + 's');
+              }
               try { await adPage.close(); } catch(e) {}
             } else {
-              console.log('ad may have navigated current page, waiting 20s...');
-              await sleep(20000);
+              console.log('ad may have navigated current page, waiting 30s...');
+              await sleep(30000);
             }
             try { await page.bringToFront(); } catch(e) {}
 
