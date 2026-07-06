@@ -2,7 +2,7 @@ name: Falix Auto Start
 
 on:
   schedule:
-    - cron: '*/30 * * * *'
+    - cron: '*/15 * * * *'
   workflow_dispatch:
   repository_dispatch:
     types: [falix-start]
