@@ -10,7 +10,7 @@ on:
 jobs:
   start-server:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - name: Checkout
@@ -143,90 +143,69 @@ jobs:
 
           async function doExtend(page) {
             console.log('=== TIMER EXTEND ===');
-            for (let attempt = 1; attempt <= 2; attempt++) {
-              console.log('--- attempt ' + attempt + '/2 ---');
-              await page.goto(TIMER_URL, { waitUntil:'domcontentloaded', timeout:30000 });
-              await sleep(3000);
-              await shot(page, 'timer_' + attempt + '_01_loaded');
+            await page.goto(TIMER_URL, { waitUntil:'domcontentloaded', timeout:30000 });
+            await sleep(3000);
+            await shot(page, 'timer_01_loaded');
 
-              const tc = await clickTurnstile(page);
-              if (tc) {
-                const ok = await waitTurnstile(page);
-                console.log(ok ? 'turnstile ok' : 'turnstile unconfirmed');
-              }
-              await shot(page, 'timer_' + attempt + '_02_turnstile');
-              await sleep(2000);
-
-              const tp = await btnPos(page, 'add time') || await btnPos(page, '添加时间');
-              if (tp) {
-                console.log('click add time @ ' + (tp.x|0) + ',' + (tp.y|0));
-                await cdpClick(page, tp.x, tp.y);
-                await sleep(3000);
-                await shot(page, 'timer_' + attempt + '_03_addtime');
-              } else {
-                console.log('no extend button found');
-                await shot(page, 'timer_' + attempt + '_03_no_btn');
-                if (attempt < 2) { await sleep(3000); continue; }
-                return 'no_btn';
-              }
-
-              const wp = await btnPos(page, 'watch ad') || await btnPos(page, '观看广告');
-              if (wp) {
-                console.log('click watch ad @ ' + (wp.x|0) + ',' + (wp.y|0));
-                await cdpClick(page, wp.x, wp.y);
-                console.log('ad opened, waiting 20s for ad to play...');
-                await sleep(20000);
-                await shot(page, 'timer_' + attempt + '_04_ad_playing').catch(()=>{});
-
-                console.log('navigating back to timer page...');
-                await page.goto(TIMER_URL, { waitUntil:'domcontentloaded', timeout:30000 }).catch(()=>{});
-                await sleep(5000);
-                await shot(page, 'timer_' + attempt + '_05_back_on_timer');
-
-                const tc2 = await clickTurnstile(page);
-                if (tc2) { await waitTurnstile(page); }
-                await sleep(2000);
-
-                const tp2 = await btnPos(page, 'add time') || await btnPos(page, '添加时间');
-                if (tp2) {
-                  console.log('second round: click add time @ ' + (tp2.x|0) + ',' + (tp2.y|0));
-                  await cdpClick(page, tp2.x, tp2.y);
-                  await sleep(3000);
-                  await shot(page, 'timer_' + attempt + '_06_second_addtime');
-
-                  const wp2 = await btnPos(page, 'watch ad') || await btnPos(page, '观看广告');
-                  if (wp2) {
-                    console.log('second round: click watch ad @ ' + (wp2.x|0) + ',' + (wp2.y|0));
-                    await cdpClick(page, wp2.x, wp2.y);
-                    console.log('second ad opened, waiting 20s...');
-                    await sleep(20000);
-                    await shot(page, 'timer_' + attempt + '_07_second_ad').catch(()=>{});
-
-                    console.log('navigating back to timer page...');
-                    await page.goto(TIMER_URL, { waitUntil:'domcontentloaded', timeout: 30000 }).catch(()=>{});
-                    await sleep(5000);
-                    await shot(page, 'timer_' + attempt + '_08_final_check');
-                  }
-                }
-
-                const extended = await page.evaluate(() =>
-                  document.body.innerText.includes('Timer has been extended') ||
-                  document.body.innerText.includes('计时器已') ||
-                  document.body.innerText.includes('extended')
-                ).catch(()=>false);
-                if (extended) {
-                  console.log('timer extended ok');
-                  return 'ok';
-                }
-                console.log('extend unconfirmed after ad');
-              } else {
-                console.log('no watch ad button found');
-                await shot(page, 'timer_' + attempt + '_04_no_ad_btn');
-              }
-              console.log('attempt ' + attempt + ' failed, retrying...');
-              await shot(page, 'timer_' + attempt + '_09_failed');
-              if (attempt < 2) await sleep(5000);
+            const tc = await clickTurnstile(page);
+            if (tc) {
+              const ok = await waitTurnstile(page);
+              console.log(ok ? 'turnstile ok' : 'turnstile unconfirmed');
             }
+            await shot(page, 'timer_02_turnstile');
+            await sleep(2000);
+
+            const tp = await btnPos(page, 'add time') || await btnPos(page, '添加时间');
+            if (!tp) {
+              console.log('no extend button found');
+              await shot(page, 'timer_03_no_btn');
+              return 'no_btn';
+            }
+            console.log('click add time @ ' + (tp.x|0) + ',' + (tp.y|0));
+            await cdpClick(page, tp.x, tp.y);
+            await sleep(3000);
+            await shot(page, 'timer_03_addtime');
+
+            const wp = await btnPos(page, 'watch ad') || await btnPos(page, '观看广告');
+            if (!wp) {
+              console.log('no watch ad button found');
+              await shot(page, 'timer_04_no_ad');
+              return 'no_ad_btn';
+            }
+            console.log('click watch ad @ ' + (wp.x|0) + ',' + (wp.y|0));
+            await cdpClick(page, wp.x, wp.y);
+
+            console.log('waiting for ad to finish (monitoring URL)...');
+            const deadline = Date.now() + 45000;
+            while (Date.now() < deadline) {
+              const url = page.url();
+              if (url.includes('timer?id=')) {
+                console.log('back on timer page');
+                break;
+              }
+              await sleep(2000);
+            }
+
+            console.log('navigating back to timer page...');
+            await page.goto(TIMER_URL, { waitUntil:'domcontentloaded', timeout:30000 }).catch(()=>{});
+            await sleep(5000);
+            await shot(page, 'timer_05_back');
+
+            const tc2 = await clickTurnstile(page);
+            if (tc2) { await waitTurnstile(page); }
+            await sleep(2000);
+
+            const extended = await page.evaluate(() =>
+              document.body.innerText.includes('Timer has been extended') ||
+              document.body.innerText.includes('计时器已') ||
+              document.body.innerText.includes('extended')
+            ).catch(()=>false);
+            await shot(page, 'timer_06_result');
+            if (extended) {
+              console.log('timer extended ok');
+              return 'ok';
+            }
+            console.log('extend unconfirmed');
             return 'unconfirmed';
           }
 
