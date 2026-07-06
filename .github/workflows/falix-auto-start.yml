@@ -55,10 +55,10 @@ jobs:
           const sleep = ms => new Promise(r => setTimeout(r, ms));
           fs.mkdirSync('/tmp/ss', { recursive: true });
 
-          async function shot(page, name) {
-            try { await page.screenshot({ path: `/tmp/ss/${name}.png`, fullPage: true }); console.log('shot:' + name); }
-            catch(e) { console.log('shot fail ' + name + ': ' + e.message); }
-          }
+async function shot(page, name) {
+  try { await page.screenshot({ path: `/tmp/ss/${name}.png`, fullPage: true, timeout: 15000 }); console.log('shot:' + name); }
+  catch(e) { console.log('shot fail ' + name + ': ' + e.message); }
+}
 
           async function tg(msg) {
             if (!TG_TOKEN || !TG_CHAT_ID) return;
@@ -141,6 +141,19 @@ jobs:
                 for (const el of document.querySelectorAll(s)) { const r=w(el); if(r) return r; }
               return w(document.body) || 'unknown';
             });
+          }
+
+          async function getRemainingTime(page) {
+            return page.evaluate(() => {
+              const t = document.body.innerText;
+              const hms = t.match(/(\d+):(\d{2}):(\d{2})/);
+              if (hms) return +hms[1]*3600 + +hms[2]*60 + +hms[3];
+              const h = t.match(/(\d+)\s*h(?:ou)?r?s?\b/i);
+              const m = t.match(/(\d+)\s*m(?:in)?s?\b/i);
+              const s = t.match(/(\d+)\s*s(?:ec)?s?\b/i);
+              if (h||m||s) return (+(h?h[1]:0))*3600 + (+(m?m[1]:0))*60 + (+(s?s[1]:0));
+              return -1;
+            }).catch(()=>-1);
           }
 
           async function doExtend(page, browser) {
@@ -385,10 +398,29 @@ jobs:
               }
             }
 
+            const timeBefore = await getRemainingTime(page);
+            console.log('time before extend: ' + timeBefore + 's');
+
             const ext = await doExtend(page, browser);
+
             if (ext === 'ok') {
-              await tg('✅ <b>Falix</b> 计时器已续期');
-              console.log('timer extend success');
+              await sleep(2000);
+              const timeAfter = await getRemainingTime(page);
+              console.log('time after extend: ' + timeAfter + 's');
+              if (timeAfter >= 3500 && timeAfter <= 3700 && timeBefore > 0) {
+                const gain = timeAfter - timeBefore;
+                await tg('✅ <b>Falix</b> 计时器已续期: ' + timeBefore + 's → ' + timeAfter + 's (+' + gain + 's)');
+                console.log('timer extend success (verified)');
+              } else if (timeAfter >= 3500 && timeAfter <= 3700) {
+                await tg('✅ <b>Falix</b> 计时器已续期: ~3600s');
+                console.log('timer extend success');
+              } else if (timeAfter > timeBefore && timeBefore > 0 && timeAfter > 0) {
+                await tg('⚠️ <b>Falix</b> 续期返回 ok 但时间异常: ' + timeBefore + 's → ' + timeAfter + 's');
+                console.log('timer extend unusual: ' + timeBefore + ' -> ' + timeAfter);
+              } else {
+                await tg('✅ <b>Falix</b> 计时器已续期（无法验证时间）');
+                console.log('timer extend success (unverified)');
+              }
             } else {
               await tg('⚠️ <b>Falix</b> 计时器续期失败: <code>' + ext + '</code>');
               console.log('timer extend failed: ' + ext);
