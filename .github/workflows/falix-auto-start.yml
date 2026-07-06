@@ -170,52 +170,15 @@ jobs:
                 return 'no_btn';
               }
 
-              const wp = await btnPos(page, 'watch ad') || await btnPos(page, '观看广告');
-              if (wp) {
-                console.log('click watch ad @ ' + (wp.x|0) + ',' + (wp.y|0));
-                await cdpClick(page, wp.x, wp.y);
-                await sleep(2000);
-                await shot(page, 'timer_' + attempt + '_04_ad_clicked');
-
-                const deadline = Date.now() + 45000;
-                let modalGone = false;
-                let extended = false;
-                while (Date.now() < deadline) {
-                  const state = await page.evaluate(() => {
-                    const hasModal = !!document.querySelector('[role="dialog"]') ||
-                      document.body.innerText.includes('Watch Ad to Extend Timer');
-                    const hasExt = document.body.innerText.includes('Timer has been extended') ||
-                      document.body.innerText.includes('计时器已') ||
-                      document.body.innerText.includes('extended');
-                    return { hasModal, hasExt };
-                  });
-                  if (state.hasExt) { extended = true; break; }
-                  if (!state.hasModal && !state.hasExt) { modalGone = true; break; }
-                  await sleep(2000);
-                }
-
-                await shot(page, 'timer_' + attempt + '_05_after_ad');
-                if (extended) {
-                  console.log('timer extended ok');
-                  return 'ok';
-                }
-                console.log('ad finished but extend unconfirmed, refreshing...');
+              const cp = await btnPos(page, 'cancel') || await btnPos(page, '取消');
+              if (cp) {
+                console.log('click cancel @ ' + (cp.x|0) + ',' + (cp.y|0));
+                await cdpClick(page, cp.x, cp.y);
                 await sleep(3000);
-                await page.goto(TIMER_URL, { waitUntil:'domcontentloaded', timeout:30000 });
-                await sleep(3000);
-                const finalCheck = await page.evaluate(() =>
-                  document.body.innerText.includes('Timer has been extended') ||
-                  document.body.innerText.includes('计时器已') ||
-                  document.body.innerText.includes('extended')
-                );
-                if (finalCheck) {
-                  console.log('timer extended ok after refresh');
-                  await shot(page, 'timer_' + attempt + '_06_refreshed_ok');
-                  return 'ok';
-                }
+                await shot(page, 'timer_' + attempt + '_04_cancel_clicked');
               } else {
-                console.log('no watch ad button found');
-                await shot(page, 'timer_' + attempt + '_04_no_ad_btn');
+                console.log('no cancel button found');
+                await shot(page, 'timer_' + attempt + '_04_no_cancel');
               }
               console.log('attempt ' + attempt + ' failed, retrying...');
               await shot(page, 'timer_' + attempt + '_07_failed');
