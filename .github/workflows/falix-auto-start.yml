@@ -173,27 +173,36 @@ jobs:
               return 'no_ad_btn';
             }
             console.log('click watch ad @ ' + (wp.x|0) + ',' + (wp.y|0));
-            const pageCount = (await browser.pages()).length;
+
+            let newTarget = null;
+            const listener = t => { if (t.type() === 'page') { newTarget = t; } };
+            browser.on('targetcreated', listener);
             await cdpClick(page, wp.x, wp.y);
             await sleep(3000);
+            browser.removeListener('targetcreated', listener);
 
-            let adPage = null;
-            const allPages = await browser.pages();
-            if (allPages.length > pageCount) {
-              adPage = allPages[allPages.length - 1];
-              console.log('ad opened in new tab: ' + adPage.url());
-              await shot(page, 'timer_04_new_tab').catch(()=>{});
+            const preCount = (await browser.pages()).length;
+            await sleep(2000);
+            const curCount = (await browser.pages()).length;
+
+            if (newTarget) {
               try {
-                await adPage.bringToFront();
-                console.log('waiting 15s for ad to play...');
-                await sleep(15000);
+                const adPage = await newTarget.page();
+                console.log('ad opened in new tab: ' + adPage.url());
+                await sleep(20000);
+                try { await adPage.close(); } catch(e) {}
               } catch(e) { console.log('ad tab error: ' + e.message); }
+            } else if (curCount > preCount) {
+              const pages = await browser.pages();
+              const adPage = pages[pages.length - 1];
+              console.log('ad in new page: ' + adPage.url());
+              await sleep(20000);
               try { await adPage.close(); } catch(e) {}
-              try { await page.bringToFront(); } catch(e) {}
             } else {
-              console.log('ad opened in same tab, waiting...');
-              await sleep(15000);
+              console.log('ad may have navigated current page, waiting 20s...');
+              await sleep(20000);
             }
+            try { await page.bringToFront(); } catch(e) {}
 
             console.log('navigating back to timer page...');
             await page.goto(TIMER_URL, { waitUntil:'domcontentloaded', timeout:30000 }).catch(()=>{});
