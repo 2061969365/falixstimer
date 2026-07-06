@@ -195,12 +195,20 @@ jobs:
             if (tc2) { await waitTurnstile(page); }
             await sleep(2000);
 
+            const tp2 = await btnPos(page, 'add time') || await btnPos(page, '添加时间');
+            if (tp2) {
+              console.log('click add time again @ ' + (tp2.x|0) + ',' + (tp2.y|0));
+              await cdpClick(page, tp2.x, tp2.y);
+              await sleep(3000);
+              await shot(page, 'timer_06_after_add');
+            }
+
             const extended = await page.evaluate(() =>
               document.body.innerText.includes('Timer has been extended') ||
               document.body.innerText.includes('计时器已') ||
               document.body.innerText.includes('extended')
             ).catch(()=>false);
-            await shot(page, 'timer_06_result');
+            await shot(page, 'timer_07_result');
             if (extended) {
               console.log('timer extended ok');
               return 'ok';
