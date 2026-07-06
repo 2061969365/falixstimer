@@ -30,7 +30,7 @@ jobs:
         id: cache-chrome
         uses: actions/cache@v4
         with:
-          path: /opt/google/chrome
+          path: /tmp/chrome-cache
           key: chrome-v1
 
       - name: Install Chrome
@@ -39,11 +39,18 @@ jobs:
           wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
           echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
           sudo apt-get update -qq && sudo apt-get install -y google-chrome-stable
+          mkdir -p /tmp/chrome-cache
+          sudo cp -a /opt/google/chrome/. /tmp/chrome-cache/
+          sudo chown -R $(whoami) /tmp/chrome-cache
           google-chrome-stable --version
 
       - name: Link Chrome
         if: steps.cache-chrome.outputs.cache-hit == 'true'
-        run: sudo ln -sf /opt/google/chrome/google-chrome /usr/bin/google-chrome-stable
+        run: |
+          sudo mkdir -p /opt/google/chrome
+          sudo cp -a /tmp/chrome-cache/. /opt/google/chrome/
+          sudo ln -sf /opt/google/chrome/google-chrome /usr/bin/google-chrome-stable
+          google-chrome-stable --version
 
       - name: Cache node_modules
         id: cache-npm
