@@ -496,3 +496,9 @@ jobs:
           name: screenshots
           path: /tmp/ss/
           retention-days: 3
+
+      - name: Schedule next run
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: sleep 240 && gh workflow run falix-auto-start.yml
