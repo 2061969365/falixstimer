@@ -55,10 +55,10 @@ jobs:
           const sleep = ms => new Promise(r => setTimeout(r, ms));
           fs.mkdirSync('/tmp/ss', { recursive: true });
 
-async function shot(page, name) {
-  try { await page.screenshot({ path: `/tmp/ss/${name}.png`, fullPage: true, timeout: 15000 }); console.log('shot:' + name); }
-  catch(e) { console.log('shot fail ' + name + ': ' + e.message); }
-}
+          async function shot(page, name) {
+            try { await page.screenshot({ path: `/tmp/ss/${name}.png`, fullPage: true, timeout: 15000 }); console.log('shot:' + name); }
+            catch(e) { console.log('shot fail ' + name + ': ' + e.message); }
+          }
 
           async function tg(msg) {
             if (!TG_TOKEN || !TG_CHAT_ID) return;
