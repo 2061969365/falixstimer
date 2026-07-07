@@ -140,6 +140,15 @@ jobs:
             }, label);
           }
 
+          async function clickBtn(page, label) {
+            return page.evaluate(lbl => {
+              const b = [...document.querySelectorAll('button')]
+                .find(b => b.textContent?.trim().toLowerCase() === lbl);
+              if (b) { b.click(); return true; }
+              return false;
+            }, label);
+          }
+
           async function clickTurnstile(page) {
             for (let i = 0; i < 20; i++) {
               const p = await page.evaluate(() => {
@@ -221,29 +230,27 @@ jobs:
             await shot(page, 'timer_02_turnstile').catch(()=>{});
             await sleep(2000);
 
-            const tp = await btnPos(page, 'add time') || await btnPos(page, '添加时间');
+            const tp = await clickBtn(page, 'add time') || await clickBtn(page, '添加时间');
             if (!tp) {
               console.log('no extend button found');
               await shot(page, 'timer_03_no_btn').catch(()=>{});
               return 'no_btn';
             }
-            console.log('click add time @ ' + (tp.x|0) + ',' + (tp.y|0));
-            await cdpClick(page, tp.x, tp.y);
+            console.log('click add time ok');
             await sleep(3000);
             await shot(page, 'timer_03_addtime').catch(()=>{});
 
-            const wp = await btnPos(page, 'watch ad') || await btnPos(page, '观看广告');
+            const wp = await clickBtn(page, 'watch ad') || await clickBtn(page, '观看广告');
             if (!wp) {
               console.log('no watch ad button found');
               await shot(page, 'timer_04_no_ad').catch(()=>{});
               return 'no_ad_btn';
             }
-            console.log('click watch ad @ ' + (wp.x|0) + ',' + (wp.y|0));
+            console.log('click watch ad ok');
 
             let alreadyExt = false;
             const urlBefore = page.url();
             const countBefore = (await browser.pages().catch(()=>[])).length;
-            await cdpClick(page, wp.x, wp.y);
             await sleep(4000);
 
             const urlAfter = page.url();
@@ -328,10 +335,9 @@ jobs:
             if (tc2) { await waitTurnstile(page); }
             await sleep(2000);
 
-            const tp2 = await btnPos(page, 'add time') || await btnPos(page, '添加时间');
+            const tp2 = await clickBtn(page, 'add time') || await clickBtn(page, '添加时间');
             if (tp2) {
-              console.log('click add time again @ ' + (tp2.x|0) + ',' + (tp2.y|0));
-              await cdpClick(page, tp2.x, tp2.y);
+              console.log('click add time again ok');
               await sleep(3000);
               await shot(page, 'timer_06_after_add').catch(()=>{});
             }
@@ -352,22 +358,20 @@ jobs:
           async function doStart(page) {
             for (let round = 1; round <= 3; round++) {
               console.log('--- round ' + round + '/3 ---');
-              const sp = await btnPos(page, 'start');
+              const sp = await clickBtn(page, 'start');
               if (!sp) { console.log('no start btn'); break; }
-              console.log('click Start @ ' + (sp.x|0) + ',' + (sp.y|0));
-              await cdpClick(page, sp.x, sp.y);
+              console.log('click start ok');
 
               let adClicked = false;
               for (let w = 0; w < 10; w++) {
                 await sleep(500);
-                const ap = await btnPos(page, 'watch ad');
+                const ap = await clickBtn(page, 'watch ad');
                 if (ap) {
                   await sleep(1000);
-                  const ap2 = await btnPos(page, 'watch ad');
+                  const ap2 = await clickBtn(page, 'watch ad');
                   if (ap2) {
                     await shot(page, 'ad_' + round);
-                    console.log('click Watch Ad @ ' + (ap2.x|0) + ',' + (ap2.y|0));
-                    await cdpClick(page, ap2.x, ap2.y);
+                    console.log('click watch ad ok');
                     adClicked = true;
                   }
                   break;
@@ -416,9 +420,8 @@ jobs:
             else console.log('no turnstile found');
             await shot(page, '03_turnstile');
 
-            const lp = await btnPos(page, 'sign in');
-            if (lp) await cdpClick(page, lp.x, lp.y);
-            else await page.keyboard.press('Enter');
+            const lp = await clickBtn(page, 'sign in');
+            if (!lp) await page.keyboard.press('Enter');
 
             try { await page.waitForNavigation({ timeout:20000, waitUntil:'domcontentloaded' }); } catch { await sleep(5000); }
             await shot(page, '04_after_login');
