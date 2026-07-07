@@ -375,7 +375,7 @@ jobs:
           }
 
           const { browser, page } = await connect({
-            headless: false, turnstile: false, disableXvfb: false,
+            headless: false, turnstile: true, disableXvfb: false,
             args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu','--window-size=1280,800'],
             customConfig: { chromePath: '/usr/bin/google-chrome-stable' },
             connectOption: { defaultViewport: { width:1280, height:800 }, protocolTimeout: 120000 },
