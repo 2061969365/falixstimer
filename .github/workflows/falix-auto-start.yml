@@ -522,4 +522,4 @@ jobs:
         if: always()
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
-        run: sleep 5 && gh workflow run falix-auto-start.yml
+        run: sleep 900 && gh workflow run falix-auto-start.yml
