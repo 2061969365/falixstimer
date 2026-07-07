@@ -402,12 +402,13 @@ jobs:
             await sleep(2000);
             await shot(page, '01_login');
 
-            await page.focus('input[type="email"]'); await sleep(200);
-            for (const c of EMAIL) { await page.keyboard.type(c, { delay: 40+Math.random()*40 }); }
-            await sleep(300);
-            await page.focus('input[type="password"]'); await sleep(200);
-            for (const c of PASSWORD) { await page.keyboard.type(c, { delay: 40+Math.random()*40 }); }
-            await sleep(300);
+            await page.evaluate((e, p) => {
+              const em = document.querySelector('input[type="email"]');
+              const pw = document.querySelector('input[type="password"]');
+              if (em) { em.value = e; em.dispatchEvent(new Event('input', { bubbles: true })); }
+              if (pw) { pw.value = p; pw.dispatchEvent(new Event('input', { bubbles: true })); }
+            }, EMAIL, PASSWORD);
+            await sleep(500);
             await shot(page, '02_creds');
 
             const tc = await clickTurnstile(page);
