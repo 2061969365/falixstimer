@@ -76,6 +76,14 @@ jobs:
           path: node_modules
           key: npm-v1
 
+      - name: Restore cookies
+        id: restore-cookies
+        uses: actions/cache/restore@v4
+        with:
+          path: cookies.json
+          key: falix-cookies-${{ github.run_id }}
+          restore-keys: falix-cookies-
+
       - name: Install Node dependencies
         if: steps.cache-npm.outputs.cache-hit != 'true'
         run: npm init -y && npm install puppeteer-real-browser puppeteer-core
@@ -95,6 +103,7 @@ jobs:
           const LOGIN_URL = 'https://client.falixnodes.net/auth/login';
           const SERVER_URL= `https://client.falixnodes.net/server/${SERVER_ID}/console`;
           const TIMER_URL = `https://client.falixnodes.net/timer?id=${SERVER_ID}`;
+          const COOKIES_PATH = process.env.COOKIES_PATH || '';
 
           const sleep = ms => new Promise(r => setTimeout(r, ms));
           const START = Date.now();
@@ -125,6 +134,33 @@ jobs:
               process.exit(0);
             }
             console.log(`${label}: ${Math.round(elapsed/1000)}s`);
+          }
+
+          async function loadCookies(page) {
+            if (!COOKIES_PATH) return false;
+            try {
+              if (!fs.existsSync(COOKIES_PATH)) return false;
+              const data = fs.readFileSync(COOKIES_PATH, 'utf8');
+              const cookies = JSON.parse(data);
+              if (!cookies || cookies.length === 0) return false;
+              await page.setCookie(...cookies);
+              console.log('已加载 ' + cookies.length + ' 个 cookie');
+              return true;
+            } catch(e) {
+              console.log('加载 cookie 失败: ' + e.message);
+              return false;
+            }
+          }
+
+          async function saveCookies(page) {
+            if (!COOKIES_PATH) return;
+            try {
+              const cookies = await page.cookies();
+              fs.writeFileSync(COOKIES_PATH, JSON.stringify(cookies, null, 2));
+              console.log('已保存 ' + cookies.length + ' 个 cookie');
+            } catch(e) {
+              console.log('保存 cookie 失败: ' + e.message);
+            }
           }
           fs.mkdirSync('/tmp/ss', { recursive: true });
 
@@ -431,16 +467,30 @@ jobs:
           console.log('browser ok');
 
           try {
+            let loggedIn = false;
+
+            const cookieLoaded = await loadCookies(page);
+            if (cookieLoaded) {
+              await page.goto(SERVER_URL, { waitUntil:'domcontentloaded', timeout:30000 }).catch(()=>{});
+              await sleep(3000);
+              const url = page.url();
+              if (url.includes('/server/') && !url.includes('/auth/login')) {
+                console.log('cookie 有效，直接进入控制台');
+                loggedIn = true;
+              } else {
+                console.log('cookie 已过期，需要重新登录');
+              }
+            }
+
+            if (!loggedIn) {
             await page.goto(LOGIN_URL, { waitUntil:'domcontentloaded', timeout:30000 });
             await sleep(2000);
             await shot(page, '01_login');
 
-            await page.evaluate((e, p) => {
-              const em = document.querySelector('input[type="email"]');
-              const pw = document.querySelector('input[type="password"]');
-              if (em) { em.value = e; em.dispatchEvent(new Event('input', { bubbles: true })); }
-              if (pw) { pw.value = p; pw.dispatchEvent(new Event('input', { bubbles: true })); }
-            }, EMAIL, PASSWORD);
+            const emEl = await page.$('input[type="email"]');
+            if (emEl) { await emEl.click(); await sleep(100); await emEl.type(EMAIL, { delay: 30 }); }
+            const pwEl = await page.$('input[type="password"]');
+            if (pwEl) { await pwEl.click(); await sleep(100); await pwEl.type(PASSWORD, { delay: 30 }); }
             await sleep(500);
             await shot(page, '02_creds');
 
@@ -462,7 +512,9 @@ jobs:
               process.exit(1);
             }
             console.log('login ok');
+            await saveCookies(page);
             await checkTime('login');
+            }
 
             await page.goto(SERVER_URL, { waitUntil:'domcontentloaded', timeout:30000 });
             await sleep(3000);
@@ -542,6 +594,7 @@ jobs:
           FALIX_SERVER_ID: ${{ secrets.FALIX_SERVER_ID }}
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          COOKIES_PATH: ${{ github.workspace }}/cookies.json
         run: node run.mjs
 
       - name: Upload screenshots
@@ -551,6 +604,13 @@ jobs:
           name: screenshots
           path: /tmp/ss/
           retention-days: 3
+
+      - name: Save cookies
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: cookies.json
+          key: falix-cookies-${{ github.run_id }}
 
       - name: Schedule next run
         if: always()
