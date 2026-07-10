@@ -14,7 +14,7 @@ concurrency:
 jobs:
   start-server:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
 
     steps:
       - name: Checkout
@@ -97,6 +97,35 @@ jobs:
           const TIMER_URL = `https://client.falixnodes.net/timer?id=${SERVER_ID}`;
 
           const sleep = ms => new Promise(r => setTimeout(r, ms));
+          const START = Date.now();
+          const LIMIT = 20 * 60 * 1000;
+
+          async function triggerNextRun() {
+            const [owner, repo] = (process.env.GITHUB_REPOSITORY || '').split('/');
+            if (!owner || !repo) return;
+            try {
+              await fetch(`https://api.github.com/repos/${owner}/${repo}/dispatches`, {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${process.env.GITHUB_TOKEN}`,
+                  'Accept': 'application/vnd.github+json',
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ event_type: 'falix-start' })
+              });
+              console.log('已触发下一轮');
+            } catch(e) { console.log('触发失败: ' + e.message); }
+          }
+
+          async function checkTime(label) {
+            const elapsed = Date.now() - START;
+            if (elapsed >= LIMIT) {
+              console.log(`${label}: 已达${Math.round(elapsed/1000)}s, 强制触发下一轮`);
+              await triggerNextRun();
+              process.exit(0);
+            }
+            console.log(`${label}: ${Math.round(elapsed/1000)}s`);
+          }
           fs.mkdirSync('/tmp/ss', { recursive: true });
 
           async function shot(page, name) {
@@ -258,7 +287,7 @@ jobs:
 
             if (urlAfter !== urlBefore && !urlAfter.includes('timer?id=')) {
               console.log('ad navigated current page to: ' + urlAfter.substring(0,80));
-              const adDeadline = Date.now() + 55000;
+              const adDeadline = Date.now() + 70000;
               while (Date.now() < adDeadline) {
                 await sleep(2000);
                 try {
@@ -275,7 +304,7 @@ jobs:
             } else if (pagesNow.length > countBefore) {
               const adPage = pagesNow[pagesNow.length - 1];
               console.log('ad opened new tab: ' + (await adPage.url().catch(()=>'?')));
-              const adDeadline = Date.now() + 55000;
+              const adDeadline = Date.now() + 70000;
               while (Date.now() < adDeadline) {
                 await sleep(3000);
                 const curPages = await browser.pages().catch(()=>[]);
@@ -291,8 +320,8 @@ jobs:
               }
               try { await adPage.close(); } catch(e) {}
             } else {
-              console.log('ad no navigation detected, waiting 50s...');
-              const adDeadline = Date.now() + 50000;
+              console.log('ad no navigation detected, waiting 70s...');
+              const adDeadline = Date.now() + 70000;
               while (Date.now() < adDeadline) {
                 await sleep(3000);
                 try {
@@ -433,6 +462,7 @@ jobs:
               process.exit(1);
             }
             console.log('login ok');
+            await checkTime('login');
 
             await page.goto(SERVER_URL, { waitUntil:'domcontentloaded', timeout:30000 });
             await sleep(3000);
@@ -440,6 +470,7 @@ jobs:
 
             const st = await getStatus(page);
             console.log('status: ' + st);
+            await checkTime('status');
 
             if (st === 'starting' || st === 'online') {
               await tg('✅ <b>Falix</b> 状态 <code>' + st + '</code>，无需操作');
@@ -459,6 +490,7 @@ jobs:
             console.log('time before extend: ' + timeBefore + 's');
 
             const ext = await doExtend(page, browser);
+            await checkTime('extend');
 
             if (ext === 'ok') {
               await page.goto(TIMER_URL, { timeout:15000 }).catch(()=>{});
@@ -483,10 +515,12 @@ jobs:
               await tg('⚠️ <b>Falix</b> 计时器续期失败: <code>' + ext + '</code>');
               console.log('timer extend failed: ' + ext);
             }
+            await triggerNextRun();
           } catch(e) {
             console.error('error: ' + e.message);
             await shot(page, 'error').catch(()=>{});
             await tg('❌ <b>Falix</b> 出错: ' + e.message);
+            await triggerNextRun();
             process.exit(1);
           } finally {
             await browser.close().catch(()=>{});
@@ -518,8 +552,4 @@ jobs:
           path: /tmp/ss/
           retention-days: 3
 
-      - name: Schedule next run
-        if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-        run: sleep 660 && gh workflow run falix-auto-start.yml
+
