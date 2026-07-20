@@ -616,5 +616,12 @@ jobs:
         if: always()
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
-        run: sleep 600 && gh workflow run falix-auto-start.yml
+        run: |
+          sleep 600
+          for i in 1 2 3 4 5; do
+            echo "Attempt $i..."
+            gh workflow run falix-auto-start.yml && break
+            echo "Failed, retrying in ${i}0s..."
+            sleep $((i * 10))
+          done
 
