@@ -390,72 +390,65 @@ jobs:
             console.log('click watch ad ok');
 
             let alreadyExt = false;
-            const urlBefore = page.url();
-            const countBefore = (await browser.pages().catch(()=>[])).length;
-            await sleep(4000);
 
-            const urlAfter = page.url();
-            const pagesNow = await browser.pages().catch(()=>[]);
+            // Step 1: Wait for video player to load, then click Play
+            await sleep(5000);
+            const playResult = await page.evaluate(() => {
+              // Video.js big play button
+              const vjs = document.querySelector('.vjs-big-play-button');
+              if (vjs && vjs.offsetWidth > 0) { vjs.click(); return 'vjs-play'; }
+              // Any button with "play" text
+              const btns = [...document.querySelectorAll('button')];
+              const play = btns.find(b => {
+                const t = (b.textContent || '').trim().toLowerCase();
+                return t.includes('play video') || t === 'play';
+              });
+              if (play) { play.click(); return 'btn-play'; }
+              // Direct video element
+              const v = document.querySelector('video');
+              if (v) { v.play().catch(()=>{}); return 'video-el'; }
+              return null;
+            }).catch(()=>null);
+            console.log('play click: ' + playResult);
 
-            if (urlAfter !== urlBefore && !urlAfter.includes('timer?id=')) {
-              console.log('ad navigated current page to: ' + urlAfter.substring(0,80));
-              const adDeadline = Date.now() + 70000;
-              while (Date.now() < adDeadline) {
-                await sleep(2000);
-                try {
-                  const cur = page.url();
-                  if (cur.includes('timer?id=')) { console.log('back on timer page'); break; }
-                  const txt = await page.evaluate(() => document.body.innerText.substring(0,200)).catch(()=>'');
-                  if (txt.includes('Timer has been extended') || txt.includes('extended')) {
-                    console.log('timer extended during ad wait');
-                    alreadyExt = true;
+            // Step 2: Monitor video playback + check extended text (70s max)
+            const adDeadline = Date.now() + 70000;
+            let videoFound = false;
+            while (Date.now() < adDeadline) {
+              await sleep(2000);
+              try {
+                const state = await page.evaluate(() => {
+                  const v = document.querySelector('video');
+                  if (!v) return null;
+                  return { paused: v.paused, ct: v.currentTime|0, dur: v.duration|0, ended: v.ended, rs: v.readyState };
+                }).catch(()=>null);
+                if (state) {
+                  videoFound = true;
+                  if (!state.paused && state.ct > 0) {
+                    console.log('ad playing: ' + state.ct + '/' + state.dur + 's');
+                  }
+                  if (state.ended || (state.ct >= state.dur && state.dur > 0)) {
+                    console.log('ad video ended');
+                    await sleep(3000);
                     break;
                   }
-                } catch(e) { console.log('page nav error, will goto timer'); break; }
-              }
-            } else if (pagesNow.length > countBefore) {
-              const adPage = pagesNow[pagesNow.length - 1];
-              console.log('ad opened new tab: ' + (await adPage.url().catch(()=>'?')));
-              const adDeadline = Date.now() + 70000;
-              while (Date.now() < adDeadline) {
-                await sleep(3000);
-                const curPages = await browser.pages().catch(()=>[]);
-                if (!curPages.includes(adPage)) { console.log('ad tab closed'); break; }
-                try {
-                  const txt = await page.evaluate(() => document.body.innerText.substring(0,200)).catch(()=>'');
-                  if (txt.includes('Timer has been extended') || txt.includes('extended')) {
-                    console.log('timer extended during ad wait');
-                    alreadyExt = true;
-                    break;
-                  }
-                } catch(e) {}
-              }
-              try { await adPage.close(); } catch(e) {}
-            } else {
-              console.log('ad no navigation detected, waiting 70s...');
-              const adDeadline = Date.now() + 70000;
-              while (Date.now() < adDeadline) {
-                await sleep(3000);
-                try {
-                  const txt = await page.evaluate(() => document.body.innerText.substring(0,200)).catch(()=>'');
-                  if (txt.includes('Timer has been extended') || txt.includes('extended')) {
-                    console.log('timer extended during ad wait');
-                    alreadyExt = true;
-                    break;
-                  }
-                  if (txt.includes('add time') || txt.includes('添加时间')) {
-                    console.log('back on timer page during ad wait');
-                    break;
-                  }
-                } catch(e) {}
-              }
-              if (!alreadyExt) {
-                for (const sel of ['.close','.dismiss','.skip','button[aria-label*=\"close\"]','[class*=\"close\"]','[class*=\"dismiss\"]']) {
-                  const el = await page.$(sel).catch(()=>null);
-                  if (el) { try { await el.click(); console.log('dismissed: ' + sel); await sleep(1000); } catch(e) {} }
                 }
-              }
+                // Check for timer extended text
+                const txt = await page.evaluate(() => document.body.innerText.substring(0,500)).catch(()=>'');
+                if (txt.includes('Timer has been extended') || txt.includes('extended') || txt.includes('计时器已')) {
+                  console.log('timer extended during ad wait');
+                  alreadyExt = true;
+                  break;
+                }
+                // Check if navigated back to timer page
+                const cur = page.url();
+                if (cur.includes('timer?id=')) {
+                  console.log('back on timer page');
+                  break;
+                }
+              } catch(e) {}
             }
+            if (!videoFound) console.log('no video element found');
             try { await page.bringToFront(); } catch(e) {}
 
             if (alreadyExt) {
@@ -527,6 +520,23 @@ jobs:
               }
               if (!adClicked) console.log('no ad modal');
 
+              // Click play button for video ad
+              await sleep(3000);
+              const playResult = await page.evaluate(() => {
+                const vjs = document.querySelector('.vjs-big-play-button');
+                if (vjs && vjs.offsetWidth > 0) { vjs.click(); return 'vjs-play'; }
+                const btns = [...document.querySelectorAll('button')];
+                const play = btns.find(b => {
+                  const t = (b.textContent || '').trim().toLowerCase();
+                  return t.includes('play video') || t === 'play';
+                });
+                if (play) { play.click(); return 'btn-play'; }
+                const v = document.querySelector('video');
+                if (v) { v.play().catch(()=>{}); return 'video-el'; }
+                return null;
+              }).catch(()=>null);
+              console.log('play click: ' + playResult);
+
               console.log('waiting 30s...');
               for (let s = 5; s <= 30; s += 5) { await sleep(5000); console.log(s + '/30s'); }
 
@@ -543,7 +553,7 @@ jobs:
 
           const { browser, page } = await connect({
             headless: false, turnstile: true, disableXvfb: false,
-            args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu','--window-size=1280,800'],
+            args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu','--window-size=1280,800','--autoplay-policy=no-user-gesture-required'],
             customConfig: { chromePath: '/usr/bin/google-chrome-stable' },
             connectOption: { defaultViewport: { width:1280, height:800 }, protocolTimeout: 120000 },
           });
