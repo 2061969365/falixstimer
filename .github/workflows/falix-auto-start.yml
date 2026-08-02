@@ -54,11 +54,39 @@ jobs:
           sudo ln -sf /opt/google/chrome/google-chrome /usr/bin/google-chrome-stable
           google-chrome-stable --version
 
-      - name: 启用 WARP 网络
-        uses: fscarmen/warp-on-actions@v1.3
+      - name: 缓存 WARP
+        id: cache-warp
+        uses: actions/cache@v4
         with:
-          stack: dual
-          mode: client
+          path: /tmp/warp-cache
+          key: warp-v2
+
+      - name: 启用 WARP（缓存命中，直接安装 deb，无需联网下载）
+        if: steps.cache-warp.outputs.cache-hit == 'true'
+        timeout-minutes: 3
+        run: |
+          sudo dpkg -i /tmp/warp-cache/*.deb 2>/dev/null || sudo apt-get install -yf
+          sudo systemctl start warp-svc 2>/dev/null || true
+          sleep 3
+          sudo warp-cli registration new 2>/dev/null || true
+          sudo warp-cli connect 2>/dev/null || true
+          sleep 5
+          sudo warp-cli status || true
+
+      - name: 启用 WARP（首次运行，安装并缓存 deb）
+        if: steps.cache-warp.outputs.cache-hit != 'true'
+        timeout-minutes: 8
+        run: |
+          curl -fsSL https://pkg.cloudflareclient.com/install.sh | sudo bash
+          sudo mkdir -p /tmp/warp-cache
+          sudo cp /var/cache/apt/archives/cloudflare-warp*.deb /tmp/warp-cache/ 2>/dev/null || true
+          ls -la /tmp/warp-cache/ || true
+          sudo systemctl start warp-svc 2>/dev/null || true
+          sleep 3
+          sudo warp-cli registration new 2>/dev/null || true
+          sudo warp-cli connect 2>/dev/null || true
+          sleep 5
+          sudo warp-cli status || true
 
       - name: 修复 DNS
         run: |
@@ -66,8 +94,8 @@ jobs:
           sudo systemctl disable systemd-resolved 2>/dev/null || true
           sudo rm -f /etc/resolv.conf
           echo -e "nameserver 1.1.1.1\nnameserver 8.8.8.8\nnameserver 1.0.0.1" | sudo tee /etc/resolv.conf
-          echo "出口 IP: $(curl -s --max-time 10 https://api.ipify.org)"
-          curl -s --max-time 10 https://www.cloudflare.com/cdn-cgi/trace | grep -E 'ip=|warp=|loc=' || true
+          echo "出口 IP: $(curl -s --max-time 15 https://api.ipify.org || echo 'unreachable')"
+          curl -s --max-time 15 https://www.cloudflare.com/cdn-cgi/trace | grep -E 'ip=|warp=|loc=' || echo "WARP trace unavailable"
 
       - name: Cache node_modules
         id: cache-npm
@@ -212,6 +240,40 @@ jobs:
               if (b) { b.click(); return true; }
               return false;
             }, label);
+          }
+
+          async function safeType(page, selector, text, label) {
+            if (!text) { console.log(label + ': 值为空，跳过输入'); return; }
+            for (let attempt = 1; attempt <= 3; attempt++) {
+              const el = await page.$(selector);
+              if (!el) { console.log(label + ': 未找到输入框 ' + selector); return; }
+              await el.click();
+              await sleep(300);
+              await page.keyboard.down('Control');
+              await page.keyboard.press('a');
+              await page.keyboard.up('Control');
+              await page.keyboard.press('Backspace');
+              await sleep(150);
+              await el.type(text, { delay: 80 });
+              await sleep(300);
+              const val = await page.evaluate(s => (document.querySelector(s)?.value || ''), selector);
+              if (val === text) {
+                console.log(label + ': 输入完成并验证通过 (attempt ' + attempt + ')');
+                return true;
+              }
+              console.log(label + ': 第 ' + attempt + ' 次输入不完整 (' + val.length + '/' + text.length + ')，重试');
+              await sleep(500);
+            }
+            console.log(label + ': 3 次输入均不完整，改用 JS 直接写入');
+            await page.evaluate((s, v) => {
+              const e = document.querySelector(s);
+              if (!e) return;
+              const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+              setter.call(e, v);
+              e.dispatchEvent(new Event('input', { bubbles: true }));
+              e.dispatchEvent(new Event('change', { bubbles: true }));
+            }, selector, text);
+            return false;
           }
 
           async function clickTurnstile(page) {
@@ -487,10 +549,8 @@ jobs:
             await sleep(2000);
             await shot(page, '01_login');
 
-            const emEl = await page.$('input[type="email"]');
-            if (emEl) { await emEl.click(); await sleep(100); await emEl.type(EMAIL, { delay: 30 }); }
-            const pwEl = await page.$('input[type="password"]');
-            if (pwEl) { await pwEl.click(); await sleep(100); await pwEl.type(PASSWORD, { delay: 30 }); }
+            await safeType(page, 'input[type="email"]', EMAIL, 'email');
+            await safeType(page, 'input[type="password"]', PASSWORD, 'password');
             await sleep(500);
             await shot(page, '02_creds');
 
@@ -612,16 +672,16 @@ jobs:
           path: cookies.json
           key: falix-cookies-${{ github.run_id }}
 
-      - name: Schedule next run
-        if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-        run: |
-          sleep 600
-          for i in 1 2 3 4 5; do
-            echo "Attempt $i..."
-            gh workflow run falix-auto-start.yml && break
-            echo "Failed, retrying in ${i}0s..."
-            sleep $((i * 10))
-          done
+      # - name: Schedule next run
+      #   if: always()
+      #   env:
+      #     GH_TOKEN: ${{ secrets.GH_PAT }}
+      #   run: |
+      #     sleep 600
+      #     for i in 1 2 3 4 5; do
+      #       echo "Attempt $i..."
+      #       gh workflow run falix-auto-start.yml && break
+      #       echo "Failed, retrying in ${i}0s..."
+      #       sleep $((i * 10))
+      #     done
 
