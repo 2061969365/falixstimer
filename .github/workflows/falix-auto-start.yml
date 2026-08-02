@@ -59,34 +59,39 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /tmp/warp-cache
-          key: warp-v2
+          key: warp-v3
 
       - name: 启用 WARP（缓存命中，直接安装 deb，无需联网下载）
         if: steps.cache-warp.outputs.cache-hit == 'true'
         timeout-minutes: 3
         run: |
-          sudo dpkg -i /tmp/warp-cache/*.deb 2>/dev/null || sudo apt-get install -yf
-          sudo systemctl start warp-svc 2>/dev/null || true
+          sudo dpkg -i /tmp/warp-cache/*.deb 2>/dev/null
+          sudo apt-get install -yf
+          sudo systemctl enable --now warp-svc || true
           sleep 3
-          sudo warp-cli registration new 2>/dev/null || true
-          sudo warp-cli connect 2>/dev/null || true
+          sudo warp-cli registration new || true
+          sudo warp-cli connect || true
           sleep 5
-          sudo warp-cli status || true
+          warp-cli status || true
 
-      - name: 启用 WARP（首次运行，安装并缓存 deb）
+      - name: 启用 WARP（首次运行：添加 apt 源、安装并缓存 deb）
         if: steps.cache-warp.outputs.cache-hit != 'true'
         timeout-minutes: 8
         run: |
-          curl -fsSL https://pkg.cloudflareclient.com/install.sh | sudo bash
+          sudo rm -f /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+          curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+          echo "deb [arch=amd64 signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
+          sudo apt-get update -qq
+          sudo apt-get install -y cloudflare-warp
+          warp-cli --version
           sudo mkdir -p /tmp/warp-cache
           sudo cp /var/cache/apt/archives/cloudflare-warp*.deb /tmp/warp-cache/ 2>/dev/null || true
-          ls -la /tmp/warp-cache/ || true
-          sudo systemctl start warp-svc 2>/dev/null || true
+          sudo systemctl enable --now warp-svc || true
           sleep 3
-          sudo warp-cli registration new 2>/dev/null || true
-          sudo warp-cli connect 2>/dev/null || true
+          sudo warp-cli registration new || true
+          sudo warp-cli connect || true
           sleep 5
-          sudo warp-cli status || true
+          warp-cli status || true
 
       - name: 修复 DNS
         run: |
@@ -287,36 +292,70 @@ jobs:
             else console.log(label + ': 键盘输入仍不完整 (' + cur.length + '/' + text.length + ')');
           }
 
-          async function clickTurnstile(page) {
-            for (let i = 0; i < 20; i++) {
-              const p = await page.evaluate(() => {
-                for (const s of ['cf-turnstile','[data-sitekey]','.cf-turnstile','iframe[src*="challenges.cloudflare.com"]']) {
-                  const el = document.querySelector(s);
-                  if (el) { const r = el.getBoundingClientRect(); if (r.width>0) return { x: r.left+24, y: r.top+r.height/2 }; }
+          async function findCfFrame(page) {
+            for (const f of page.frames()) {
+              try {
+                if (/challenges\.cloudflare\.com\/turnstile/i.test(f.url() || '')) return f;
+              } catch(e) {}
+            }
+            return null;
+          }
+
+          async function clickTurnstileCheckbox(frame, page, timeoutMs) {
+            const end = Date.now() + timeoutMs;
+            while (Date.now() < end) {
+              try {
+                const cb = await frame.$('#checkbox, .cb-container, div[class*="checkbox"]');
+                if (cb) {
+                  const box = await cb.boundingBox();
+                  if (box && box.width > 0 && box.height > 0) {
+                    await cdpClick(page, box.x + box.width/2, box.y + box.height/2);
+                    console.log('[turnstile] checkbox clicked');
+                    return true;
+                  }
                 }
-                return null;
-              });
-              if (p) { console.log('Turnstile @ ' + (p.x|0) + ',' + (p.y|0)); await cdpClick(page, p.x, p.y); return true; }
+              } catch(e) {}
               await sleep(1000);
             }
+            console.log('[turnstile] no visible checkbox in iframe');
             return false;
           }
 
-          async function waitTurnstile(page) {
-            const end = Date.now() + 15000;
+          async function hasTurnstileToken(page) {
+            return page.evaluate(() => {
+              const els = document.querySelectorAll('input[name="cf-turnstile-response"], textarea[name="cf-turnstile-response"]');
+              for (const el of els) if (el.value && el.value.length > 10) return true;
+              return false;
+            }).catch(()=>false);
+          }
+
+          async function solveTurnstile(page, timeoutMs) {
+            timeoutMs = timeoutMs || 60000;
+            const end = Date.now() + timeoutMs;
+            // 1) 轮询等 iframe 出现
+            let frame = null;
             while (Date.now() < end) {
-              const ok = await page.evaluate(() =>
-                [...document.querySelectorAll('input[name="cf-turnstile-response"],textarea[name="cf-turnstile-response"]')]
-                  .some(i => i.value && i.value.length > 10)
-              ).catch(()=>false);
-              if (ok) return true;
-              for (const f of page.frames()) {
-                if (!f.url().includes('cloudflare')) continue;
-                const t = await f.evaluate(()=>document.body?.innerText||'').catch(()=>'');
-                if (t.includes('Success')) return true;
-              }
-              await sleep(500);
+              frame = await findCfFrame(page);
+              if (frame) break;
+              await sleep(1000);
             }
+            if (!frame) { console.log('[turnstile] no cf iframe found'); return false; }
+            console.log('[turnstile] iframe found: ' + (frame.url() || '').substring(0, 60));
+            // 2) 点 iframe 内真实 checkbox
+            await clickTurnstileCheckbox(frame, page, Math.min(30000, end - Date.now()));
+            // 3) 轮询父页 token 直到有值
+            while (Date.now() < end) {
+              if (await hasTurnstileToken(page)) {
+                const token = await page.evaluate(() => {
+                  const el = document.querySelector('input[name="cf-turnstile-response"], textarea[name="cf-turnstile-response"]');
+                  return el && el.value ? el.value : null;
+                });
+                console.log('[turnstile] solved, token len=' + (token ? token.length : 0));
+                return true;
+              }
+              await sleep(1000);
+            }
+            console.log('[turnstile] unconfirmed (timeout)');
             return false;
           }
 
@@ -360,11 +399,8 @@ jobs:
             await sleep(3000);
             await shot(page, 'timer_01_loaded').catch(()=>{});
 
-            const tc = await clickTurnstile(page);
-            if (tc) {
-              const ok = await waitTurnstile(page);
-              console.log(ok ? 'turnstile ok' : 'turnstile unconfirmed');
-            }
+            const tOk = await solveTurnstile(page, 60000);
+            console.log(tOk ? 'timer turnstile ok' : 'timer turnstile unconfirmed');
             await shot(page, 'timer_02_turnstile').catch(()=>{});
             await sleep(2000);
 
@@ -469,8 +505,7 @@ jobs:
             });
             await sleep(5000);
 
-            const tc2 = await clickTurnstile(page);
-            if (tc2) { await waitTurnstile(page); }
+            await solveTurnstile(page, 60000);
             await sleep(2000);
 
             const tp2 = await clickBtn(page, 'add time') || await clickBtn(page, '添加时间');
@@ -532,7 +567,7 @@ jobs:
           }
 
           const { browser, page } = await connect({
-            headless: false, turnstile: true, disableXvfb: false,
+            headless: false, turnstile: false, disableXvfb: false,
             args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu','--window-size=1280,800'],
             customConfig: { chromePath: '/usr/bin/google-chrome-stable' },
             connectOption: { defaultViewport: { width:1280, height:800 }, protocolTimeout: 120000 },
@@ -565,9 +600,8 @@ jobs:
             await sleep(500);
             await shot(page, '02_creds');
 
-            const tc = await clickTurnstile(page);
-            if (tc) { const ok = await waitTurnstile(page); console.log(ok?'turnstile ok':'turnstile unconfirmed'); }
-            else console.log('no turnstile found');
+            const tOk = await solveTurnstile(page, 60000);
+            console.log(tOk ? 'login turnstile ok' : 'login turnstile unconfirmed');
             await shot(page, '03_turnstile');
 
             const lp = await clickBtn(page, 'sign in');
