@@ -73,7 +73,7 @@ jobs:
           sudo systemctl enable --now warp-svc || true
           sleep 3
           sudo warp-cli --accept-tos registration new || true
-          sudo warp-cli --accept-tos mode warp+doh || true
+          sudo warp-cli --accept-tos mode warp || true
           sudo warp-cli --accept-tos connect || true
           sleep 5
           warp-cli status || true
@@ -93,7 +93,7 @@ jobs:
           sudo systemctl enable --now warp-svc || true
           sleep 3
           sudo warp-cli --accept-tos registration new || true
-          sudo warp-cli --accept-tos mode warp+doh || true
+          sudo warp-cli --accept-tos mode warp || true
           sudo warp-cli --accept-tos connect || true
           sleep 5
           warp-cli status || true
