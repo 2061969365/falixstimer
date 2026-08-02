@@ -390,9 +390,23 @@ jobs:
             console.log('click watch ad ok');
 
             let alreadyExt = false;
+            const urlBeforeAd = page.url();
 
             // Step 1: Wait for video player to load, then click Play
             await sleep(5000);
+            // Log full video/player state before clicking play
+            const preState = await page.evaluate(() => {
+              const v = document.querySelector('video');
+              const vjs = document.querySelector('.vjs-big-play-button');
+              const iframes = [...document.querySelectorAll('iframe')].map(f => (f.src||'').substring(0,80));
+              return {
+                video: v ? { paused: v.paused, ct: v.currentTime|0, dur: v.duration|0, src: (v.currentSrc||'').substring(0,60), rs: v.readyState } : null,
+                vjsPlayBtn: vjs ? { visible: vjs.offsetWidth > 0, text: vjs.textContent?.trim()?.substring(0,30) } : null,
+                imaIframes: iframes.filter(s => s.includes('ima') || s.includes('imasdk'))
+              };
+            }).catch(()=>null);
+            console.log('pre-play state: ' + JSON.stringify(preState));
+
             const playResult = await page.evaluate(() => {
               // Video.js big play button
               const vjs = document.querySelector('.vjs-big-play-button');
@@ -440,9 +454,9 @@ jobs:
                   alreadyExt = true;
                   break;
                 }
-                // Check if navigated back to timer page
+                // Check if navigated away from timer page and came back
                 const cur = page.url();
-                if (cur.includes('timer?id=')) {
+                if (!urlBeforeAd.includes('timer?id=') && cur.includes('timer?id=')) {
                   console.log('back on timer page');
                   break;
                 }
