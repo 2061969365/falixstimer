@@ -408,19 +408,19 @@ jobs:
             console.log('pre-play state: ' + JSON.stringify(preState));
 
             const playResult = await page.evaluate(() => {
-              // Video.js big play button
+              // Priority 1: Direct video.play() — most reliable for blob URL sources
+              const v = document.querySelector('video');
+              if (v) { v.play().catch(()=>{}); return 'video-play'; }
+              // Priority 2: Video.js big play button
               const vjs = document.querySelector('.vjs-big-play-button');
               if (vjs && vjs.offsetWidth > 0) { vjs.click(); return 'vjs-play'; }
-              // Any button with "play" text
+              // Priority 3: Any button with "play" text
               const btns = [...document.querySelectorAll('button')];
               const play = btns.find(b => {
                 const t = (b.textContent || '').trim().toLowerCase();
                 return t.includes('play video') || t === 'play';
               });
               if (play) { play.click(); return 'btn-play'; }
-              // Direct video element
-              const v = document.querySelector('video');
-              if (v) { v.play().catch(()=>{}); return 'video-el'; }
               return null;
             }).catch(()=>null);
             console.log('play click: ' + playResult);
@@ -537,6 +537,8 @@ jobs:
               // Click play button for video ad
               await sleep(3000);
               const playResult = await page.evaluate(() => {
+                const v = document.querySelector('video');
+                if (v) { v.play().catch(()=>{}); return 'video-play'; }
                 const vjs = document.querySelector('.vjs-big-play-button');
                 if (vjs && vjs.offsetWidth > 0) { vjs.click(); return 'vjs-play'; }
                 const btns = [...document.querySelectorAll('button')];
@@ -545,8 +547,6 @@ jobs:
                   return t.includes('play video') || t === 'play';
                 });
                 if (play) { play.click(); return 'btn-play'; }
-                const v = document.querySelector('video');
-                if (v) { v.play().catch(()=>{}); return 'video-el'; }
                 return null;
               }).catch(()=>null);
               console.log('play click: ' + playResult);
