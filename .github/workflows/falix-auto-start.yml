@@ -242,38 +242,49 @@ jobs:
             }, label);
           }
 
-          async function safeType(page, selector, text, label) {
-            if (!text) { console.log(label + ': 值为空，跳过输入'); return; }
-            for (let attempt = 1; attempt <= 3; attempt++) {
-              const el = await page.$(selector);
-              if (!el) { console.log(label + ': 未找到输入框 ' + selector); return; }
-              await el.click();
-              await sleep(300);
-              await page.keyboard.down('Control');
-              await page.keyboard.press('a');
-              await page.keyboard.up('Control');
-              await page.keyboard.press('Backspace');
-              await sleep(150);
-              await el.type(text, { delay: 80 });
-              await sleep(300);
-              const val = await page.evaluate(s => (document.querySelector(s)?.value || ''), selector);
-              if (val === text) {
-                console.log(label + ': 输入完成并验证通过 (attempt ' + attempt + ')');
-                return true;
-              }
-              console.log(label + ': 第 ' + attempt + ' 次输入不完整 (' + val.length + '/' + text.length + ')，重试');
-              await sleep(500);
-            }
-            console.log(label + ': 3 次输入均不完整，改用 JS 直接写入');
-            await page.evaluate((s, v) => {
+          async function setVal(page, selector, text) {
+            return page.evaluate((s, v) => {
               const e = document.querySelector(s);
-              if (!e) return;
-              const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-              setter.call(e, v);
+              if (!e) return { ok: false, reason: 'notfound' };
+              e.focus();
+              const proto = e.tagName === 'TEXTAREA'
+                ? Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')
+                : Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+              proto.set.call(e, v);
               e.dispatchEvent(new Event('input', { bubbles: true }));
               e.dispatchEvent(new Event('change', { bubbles: true }));
+              e.blur();
+              return { ok: e.value === v, len: e.value.length };
             }, selector, text);
-            return false;
+          }
+
+          async function safeType(page, selector, text, label) {
+            if (!text) { console.log(label + ': 值为空，跳过'); return; }
+            const target = await page.$(selector);
+            if (!target) { console.log(label + ': 找不到输入框 ' + selector); return; }
+            // 主方法：原生 setter 写入（不依赖键盘事件，避免丢字符）
+            for (let attempt = 1; attempt <= 3; attempt++) {
+              let r;
+              try { r = await setVal(page, selector, text); } catch(e) { console.log(label + ': set 抛错 ' + e.message); r = {ok:false}; }
+              await sleep(400);
+              const cur = await page.evaluate(s => document.querySelector(s)?.value || '', selector);
+              if (cur === text) { console.log(label + ': 写入验证通过 (attempt ' + attempt + ') len=' + cur.length); return true; }
+              console.log(label + ': attempt ' + attempt + ' 不完整 (' + (r&&r.len) + '/' + text.length + ')，重试');
+              await sleep(500);
+            }
+            // 兜底：键盘输入（某些站点依赖真实键入行为）
+            await target.click();
+            await sleep(300);
+            await page.keyboard.down('Control');
+            await page.keyboard.press('a');
+            await page.keyboard.up('Control');
+            await page.keyboard.press('Backspace');
+            await sleep(150);
+            await target.type(text, { delay: 50 });
+            await sleep(300);
+            const cur = await page.evaluate(s => document.querySelector(s)?.value || '', selector);
+            if (cur === text) console.log(label + ': 键盘输入 OK len=' + cur.length);
+            else console.log(label + ': 键盘输入仍不完整 (' + cur.length + '/' + text.length + ')');
           }
 
           async function clickTurnstile(page) {
