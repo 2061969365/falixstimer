@@ -65,8 +65,11 @@ jobs:
         if: steps.cache-warp.outputs.cache-hit == 'true'
         timeout-minutes: 3
         run: |
-          sudo dpkg -i /tmp/warp-cache/*.deb 2>/dev/null
-          sudo apt-get install -yf
+          sudo rm -f /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+          curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+          echo "deb [arch=amd64 signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list > /dev/null
+          sudo dpkg -i /tmp/warp-cache/*.deb 2>/dev/null || true
+          sudo apt-get install -yf || true
           sudo systemctl enable --now warp-svc || true
           sleep 3
           sudo warp-cli --accept-tos registration new || true
