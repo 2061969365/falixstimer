@@ -345,18 +345,9 @@ jobs:
             let alreadyExt = false;
             const urlBeforeAd = page.url();
 
-            // Step 1: Wait for video player + IMA SDK to load, then click Play
-            // Wait for IMA SDK bridge iframe (needed for ad playback)
-            let imaLoaded = false;
-            for (let w = 0; w < 15; w++) {
-              const imaCount = await page.evaluate(() =>
-                document.querySelectorAll('iframe[src*="imasdk"]').length
-              ).catch(()=>0);
-              if (imaCount > 0) { imaLoaded = true; break; }
-              await sleep(1000);
-            }
-            console.log('ima loaded: ' + imaLoaded);
-            // Log full video/player state before clicking play
+            // Step 1: Wait for video player to load, then click Play
+            await sleep(5000);
+            // Log video/player state before clicking play
             const preState = await page.evaluate(() => {
               const v = document.querySelector('video');
               const vjs = document.querySelector('.vjs-big-play-button');
@@ -496,17 +487,7 @@ jobs:
               }
               if (!adClicked) console.log('no ad modal');
 
-              // Wait for IMA SDK bridge iframe before playing
-              let imaOk = false;
-              for (let w = 0; w < 15; w++) {
-                const imaCount = await page.evaluate(() =>
-                  document.querySelectorAll('iframe[src*="imasdk"]').length
-                ).catch(()=>0);
-                if (imaCount > 0) { imaOk = true; break; }
-                await sleep(1000);
-              }
-              console.log('ima loaded: ' + imaOk);
-
+              await sleep(3000);
               const playResult = await page.evaluate(() => {
                 const v = document.querySelector('video');
                 if (v) { v.play().catch(()=>{}); return 'video-play'; }
