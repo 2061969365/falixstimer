@@ -317,11 +317,102 @@ jobs:
             }).catch(()=>-1);
           }
 
+          async function tryAdRound(page, label) {
+            const wp = await clickBtn(page, 'watch ad') || await clickBtn(page, '观看广告');
+            if (!wp) {
+              console.log(label + ': no watch ad button found');
+              await shot(page, label + '_no_ad').catch(()=>{});
+              return 'no_ad_btn';
+            }
+            console.log(label + ': click watch ad ok');
+            await shot(page, label + '_ad_modal').catch(()=>{});
+            await sleep(5000);
+
+            const preState = await page.evaluate(() => {
+              const v = document.querySelector('video');
+              const vjs = document.querySelector('.vjs-big-play-button');
+              const iframes = [...document.querySelectorAll('iframe')].map(f => (f.src||'').substring(0,80));
+              return {
+                video: v ? { paused: v.paused, ct: v.currentTime|0, dur: v.duration|0, src: (v.currentSrc||'').substring(0,60), rs: v.readyState } : null,
+                vjsPlayBtn: vjs ? { visible: vjs.offsetWidth > 0, text: vjs.textContent?.trim()?.substring(0,30) } : null,
+                imaIframes: iframes.filter(s => s.includes('ima') || s.includes('imasdk'))
+              };
+            }).catch(()=>null);
+            console.log(label + ' pre-play state: ' + JSON.stringify(preState));
+
+            const playResult = await page.evaluate(() => {
+              const v = document.querySelector('video');
+              if (v) { v.play().catch(()=>{}); return 'video-play'; }
+              const vjs = document.querySelector('.vjs-big-play-button');
+              if (vjs && vjs.offsetWidth > 0) { vjs.click(); return 'vjs-play'; }
+              const btns = [...document.querySelectorAll('button')];
+              const play = btns.find(b => {
+                const t = (b.textContent || '').trim().toLowerCase();
+                return t.includes('play video') || t === 'play';
+              });
+              if (play) { play.click(); return 'btn-play'; }
+              return null;
+            }).catch(()=>null);
+            console.log(label + ' play click: ' + playResult);
+
+            let alreadyExt = false;
+            const urlBeforeAd = page.url();
+            const adDeadline = Date.now() + 90000;
+            let lastPlayAt = 0;
+            let sawSrc = false;
+            while (Date.now() < adDeadline) {
+              await sleep(2000);
+              try {
+                const state = await page.evaluate(() => {
+                  const v = document.querySelector('video');
+                  if (!v) return null;
+                  return { paused: v.paused, ct: v.currentTime|0, dur: v.duration|0, ended: v.ended, rs: v.readyState, hasSrc: !!(v.currentSrc || v.src) };
+                }).catch(()=>null);
+                if (state) {
+                  if (state.hasSrc && !sawSrc) { sawSrc = true; console.log(label + ': video src loaded'); }
+                  if (!state.paused && state.ct > 0) {
+                    console.log(label + ' ad playing: ' + state.ct + '/' + state.dur + 's');
+                  }
+                  // 广告媒体晚到：src 出现但处于暂停 → 反复调用 play()
+                  if (state.paused && state.hasSrc && Date.now() - lastPlayAt > 5000) {
+                    lastPlayAt = Date.now();
+                    await page.evaluate(() => { const v = document.querySelector('video'); if (v) v.play().catch(()=>{}); }).catch(()=>{});
+                    console.log(label + ': re-play called');
+                  }
+                  if (state.ended || (state.ct >= state.dur && state.dur > 0)) {
+                    console.log(label + ': ad video ended');
+                    await sleep(3000);
+                    break;
+                  }
+                }
+                const txt = await page.evaluate(() => document.body.innerText.substring(0,500)).catch(()=>'');
+                if (txt.includes('Timer has been extended') || txt.includes('extended') || txt.includes('计时器已')) {
+                  console.log(label + ': timer extended during ad wait');
+                  alreadyExt = true;
+                  break;
+                }
+                const cur = page.url();
+                if (!urlBeforeAd.includes('timer?id=') && cur.includes('timer?id=')) {
+                  console.log(label + ': back on timer page');
+                  break;
+                }
+              } catch(e) {}
+            }
+            if (!sawSrc) console.log(label + ': video never got a src');
+            try { await page.bringToFront(); } catch(e) {}
+
+            if (alreadyExt) {
+              console.log(label + ': timer extended ok (detected during ad wait)');
+              await shot(page, label + '_result').catch(()=>{});
+              return 'ok';
+            }
+            return 'unconfirmed';
+          }
+
           async function doExtend(page, browser) {
             console.log('=== TIMER EXTEND ===');
             await page.goto(TIMER_URL, { waitUntil:'domcontentloaded', timeout:30000 }).catch(()=>{});
             await sleep(3000);
-            // 处理 GDPR/隐私弹窗
             await page.evaluate(() => {
               const btns = [...document.querySelectorAll('button')];
               const accept = btns.find(b => b.textContent.includes('Accept all') || b.textContent.includes('接受全部') || b.textContent.includes('接受所有'));
@@ -345,95 +436,9 @@ jobs:
             await sleep(3000);
             await shot(page, 'timer_03_addtime').catch(()=>{});
 
-            const wp = await clickBtn(page, 'watch ad') || await clickBtn(page, '观看广告');
-            if (!wp) {
-              console.log('no watch ad button found');
-              await shot(page, 'timer_04_no_ad').catch(()=>{});
-              return 'no_ad_btn';
-            }
-            console.log('click watch ad ok');
-
-            let alreadyExt = false;
-            const urlBeforeAd = page.url();
-
-            // Step 1: Wait for video player to load, then click Play
-            await sleep(5000);
-            // Log video/player state before clicking play
-            const preState = await page.evaluate(() => {
-              const v = document.querySelector('video');
-              const vjs = document.querySelector('.vjs-big-play-button');
-              const iframes = [...document.querySelectorAll('iframe')].map(f => (f.src||'').substring(0,80));
-              return {
-                video: v ? { paused: v.paused, ct: v.currentTime|0, dur: v.duration|0, src: (v.currentSrc||'').substring(0,60), rs: v.readyState } : null,
-                vjsPlayBtn: vjs ? { visible: vjs.offsetWidth > 0, text: vjs.textContent?.trim()?.substring(0,30) } : null,
-                imaIframes: iframes.filter(s => s.includes('ima') || s.includes('imasdk'))
-              };
-            }).catch(()=>null);
-            console.log('pre-play state: ' + JSON.stringify(preState));
-
-            const playResult = await page.evaluate(() => {
-              // Priority 1: Direct video.play() — most reliable for blob URL sources
-              const v = document.querySelector('video');
-              if (v) { v.play().catch(()=>{}); return 'video-play'; }
-              // Priority 2: Video.js big play button
-              const vjs = document.querySelector('.vjs-big-play-button');
-              if (vjs && vjs.offsetWidth > 0) { vjs.click(); return 'vjs-play'; }
-              // Priority 3: Any button with "play" text
-              const btns = [...document.querySelectorAll('button')];
-              const play = btns.find(b => {
-                const t = (b.textContent || '').trim().toLowerCase();
-                return t.includes('play video') || t === 'play';
-              });
-              if (play) { play.click(); return 'btn-play'; }
-              return null;
-            }).catch(()=>null);
-            console.log('play click: ' + playResult);
-
-            // Step 2: Monitor video playback + check extended text (70s max)
-            const adDeadline = Date.now() + 70000;
-            let videoFound = false;
-            while (Date.now() < adDeadline) {
-              await sleep(2000);
-              try {
-                const state = await page.evaluate(() => {
-                  const v = document.querySelector('video');
-                  if (!v) return null;
-                  return { paused: v.paused, ct: v.currentTime|0, dur: v.duration|0, ended: v.ended, rs: v.readyState };
-                }).catch(()=>null);
-                if (state) {
-                  videoFound = true;
-                  if (!state.paused && state.ct > 0) {
-                    console.log('ad playing: ' + state.ct + '/' + state.dur + 's');
-                  }
-                  if (state.ended || (state.ct >= state.dur && state.dur > 0)) {
-                    console.log('ad video ended');
-                    await sleep(3000);
-                    break;
-                  }
-                }
-                // Check for timer extended text
-                const txt = await page.evaluate(() => document.body.innerText.substring(0,500)).catch(()=>'');
-                if (txt.includes('Timer has been extended') || txt.includes('extended') || txt.includes('计时器已')) {
-                  console.log('timer extended during ad wait');
-                  alreadyExt = true;
-                  break;
-                }
-                // Check if navigated away from timer page and came back
-                const cur = page.url();
-                if (!urlBeforeAd.includes('timer?id=') && cur.includes('timer?id=')) {
-                  console.log('back on timer page');
-                  break;
-                }
-              } catch(e) {}
-            }
-            if (!videoFound) console.log('no video element found');
-            try { await page.bringToFront(); } catch(e) {}
-
-            if (alreadyExt) {
-              console.log('timer extended ok (detected during ad wait)');
-              await shot(page, 'timer_07_result').catch(()=>{});
-              return 'ok';
-            }
+            const r1 = await tryAdRound(page, 'ad1');
+            if (r1 === 'ok') return 'ok';
+            console.log('first ad round: ' + r1 + ', retrying...');
 
             console.log('reloading timer page...');
             await page.goto(TIMER_URL, { timeout:15000 }).catch(async ()=>{
@@ -443,7 +448,6 @@ jobs:
             });
             await sleep(5000);
 
-            // 处理 GDPR 弹窗
             await page.evaluate(() => {
               const btns = [...document.querySelectorAll('button')];
               const accept = btns.find(b => b.textContent.includes('Accept all') || b.textContent.includes('接受全部'));
@@ -461,6 +465,9 @@ jobs:
               await shot(page, 'timer_06_after_add').catch(()=>{});
             }
 
+            const r2 = await tryAdRound(page, 'ad2');
+            if (r2 === 'ok') return 'ok';
+
             const extended = await page.evaluate(() =>
               document.body.innerText.includes('Timer has been extended') ||
               document.body.innerText.includes('计时器已') ||
@@ -471,7 +478,7 @@ jobs:
               console.log('timer extended ok');
               return 'ok';
             }
-            console.log('extend unconfirmed');
+            console.log('extend unconfirmed (rounds: ' + r1 + '/' + r2 + ')');
             return 'unconfirmed';
           }
           async function doStart(page) {
@@ -656,6 +663,7 @@ jobs:
 
       - name: Run script
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           FALIX_EMAIL: ${{ secrets.FALIX_EMAIL }}
           FALIX_PASSWORD: ${{ secrets.FALIX_PASSWORD }}
           FALIX_SERVER_ID: ${{ secrets.FALIX_SERVER_ID }}
