@@ -702,7 +702,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           current="${{ github.run_id }}"
-          ids=$(gh api --paginate "repos/${{ github.repository }}/actions/runs?per_page=100" \
+          ids=$(gh api "repos/${{ github.repository }}/actions/runs?per_page=100" \
             --jq '.workflow_runs[] | select(.status == "completed") | .id' | grep -v "^${current}$")
           keep=$(echo "$ids" | sort -nr | head -n 3)
           for id in $ids; do
