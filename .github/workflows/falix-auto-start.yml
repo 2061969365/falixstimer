@@ -99,7 +99,7 @@ jobs:
 
           const EMAIL     = process.env.FALIX_EMAIL;
           const PASSWORD  = process.env.FALIX_PASSWORD;
-          const SERVER_ID = process.env.FALIX_SERVER_ID || '3402378'; // 默认本仓库验证的 timer id
+          const SERVER_ID = process.env.FALIX_SERVER_ID;
           const TG_TOKEN  = process.env.TG_TOKEN;
           const TG_CHAT_ID= process.env.TG_CHAT_ID;
           const LOGIN_URL = 'https://client.falixnodes.net/auth/login';
@@ -633,20 +633,18 @@ jobs:
               await sleep(3000);
               const timeAfter = await getRemainingTime(page);
               console.log('time after extend: ' + timeAfter + 's');
-              // 通用校验：71小时大计时器也能正确判定；原 3500-3700 仅适用于 1h 计时器
-              if (timeAfter > timeBefore && timeBefore > 0 && timeAfter > 0) {
+              if (timeAfter >= 3500 && timeAfter <= 3700 && timeBefore > 0) {
                 const gain = timeAfter - timeBefore;
-                const fmt = s => Math.floor(s/3600) + 'h' + Math.floor(s%3600/60) + 'm';
-                await tg('✅ <b>Falix</b> 计时器已续期: ' + fmt(timeBefore) + '(' + timeBefore + 's) → ' + fmt(timeAfter) + '(' + timeAfter + 's) +' + gain + 's');
-                console.log('timer extend success (verified gain=' + gain + ')');
-              } else if (timeAfter > 0 && timeBefore === -1) {
-                await tg('✅ <b>Falix</b> 计时器已续期: ' + timeAfter + 's (约' + Math.floor(timeAfter/3600) + 'h)');
-                console.log('timer extend success (timeBefore unknown)');
-              } else if (timeAfter === timeBefore && timeAfter > 0) {
-                await tg('⚠️ <b>Falix</b> 续期返回 ok 但时间未增加: ' + timeBefore + 's → ' + timeAfter + 's');
-                console.log('timer extend ok but time unchanged');
+                await tg('✅ <b>Falix</b> 计时器已续期: ' + timeBefore + 's → ' + timeAfter + 's (+' + gain + 's)');
+                console.log('timer extend success (verified)');
+              } else if (timeAfter >= 3500 && timeAfter <= 3700) {
+                await tg('✅ <b>Falix</b> 计时器已续期: ~3600s');
+                console.log('timer extend success');
+              } else if (timeAfter > timeBefore && timeBefore > 0 && timeAfter > 0) {
+                await tg('⚠️ <b>Falix</b> 续期返回 ok 但时间异常: ' + timeBefore + 's → ' + timeAfter + 's');
+                console.log('timer extend unusual: ' + timeBefore + ' -> ' + timeAfter);
               } else {
-                await tg('✅ <b>Falix</b> 计时器已续期（已检测到 extended 文案，时间校验: ' + timeBefore + '→' + timeAfter + '）');
+                await tg('✅ <b>Falix</b> 计时器已续期（无法验证时间）');
                 console.log('timer extend success (unverified)');
               }
             } else {
